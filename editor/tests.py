@@ -185,6 +185,7 @@ class EditorTests(TestCase):
         self.assertIn('id="attach"', html)
         self.assertIn('id="image-view"', html)
         self.assertIn('id="btn-ocr"', html)
+        self.assertIn('id="btn-help"', html)
         self.assertIn('id="image-ocr-settings"', html)
         boot = self.client.get("/api/bootstrap").json()
         self.assertEqual(boot["ocr_endpoint"], "https://api.opentyphoon.ai/v1/ocr")
@@ -313,6 +314,25 @@ class EditorTests(TestCase):
             self.assertNotIn("sk-", json.dumps(again))
             bad = self.j("put", "/api/ocr-settings", {"endpoint": "not a url", "model": "", "api_key": ""})
             self.assertEqual(bad.status_code, 400)
+
+    def test_help_button_serves_both_manuals(self):
+        en = self.client.get("/api/help").json()
+        self.assertEqual(en["lang"], "en")
+        self.assertIn('id="5-opening-folders-the-workspace"', en["html"])
+        self.assertIn("Read text", en["html"])
+        self.assertIn('href="#16-troubleshooting"', en["html"])
+        self.assertNotIn("<script>", en["html"])
+        thai = self.client.get("/api/help", {"lang": "th"}).json()
+        self.assertEqual(thai["lang"], "th")
+        self.assertIn("การแก้ไขไฟล์", thai["html"])
+        self.assertIn("อ่านข้อความในรูป", thai["html"])
+        other = self.client.get("/api/help", {"lang": "fr"}).json()
+        self.assertEqual(other["lang"], "en")
+        from .manual import render_md
+        rendered = render_md("See <script>alert(1)</script> and [docs](https://example.com).")
+        self.assertIn("&lt;script&gt;", rendered)
+        self.assertNotIn("<script>", rendered)
+        self.assertIn('href="https://example.com"', rendered)
 
     def test_path_traversal_blocked(self):
         base = f"/api/ws/{self.ws}/file"

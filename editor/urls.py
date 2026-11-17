@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("api/help", views.help_manual),
     path("api/bootstrap", views.bootstrap),
     path("api/workspaces", views.workspaces),
     path("api/workspaces/<int:ws_id>", views.workspace_detail),

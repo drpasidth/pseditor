@@ -129,7 +129,7 @@ If the browser does not open by itself, type that address in the browser.
 
 | Area | What it does |
 |------|--------------|
-| **Top bar** | Open a folder, go to a file by name, show/hide the terminal, show/hide the AI chat, set up agents. |
+| **Top bar** | Open a folder, go to a file by name, show/hide the terminal, show/hide the AI chat, set the OCR endpoint, set up agents, and open this manual (**?**). |
 | **Left sidebar** | **Explorer** (file tree) and **Search** (search inside files). |
 | **Center** | Code editor with tabs. The terminal opens below it. |
 | **Right panel** | AI chat: choose agent, conversation and model; see which folders the agent can use; type requests. |
@@ -191,6 +191,22 @@ Right-click in the Explorer:
 
 The buttons at the top of the Explorer do the same: **+ File**, **+ New folder**, **📁 Add to workspace**,
 **↻** (refresh the tree).
+
+### Pictures
+
+Click a `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` or `.bmp` file in the Explorer. PSEditor shows the picture
+instead of the code editor. Saving does not change a picture.
+
+### Read the text in a picture
+
+1. Click the gear in the top bar (**OCR endpoint**).
+2. Leave the endpoint as `https://api.opentyphoon.ai/v1/ocr` and the model as `typhoon-ocr`. Paste your Typhoon
+   API key, click **Test**, then **Save**. A URL that ends in `/ocr` is sent to the chat address that accepts images.
+3. Open a picture and click **Read text**. The text, including Thai, appears under the picture.
+4. You can also attach a picture in the chat, or ask the agent to read a picture in the workspace. If the chat
+   model cannot see images, PSEditor sends the text from this OCR endpoint instead.
+
+Click **?** in the top bar to open this manual. Use **English** or **ไทย** at the top of the manual.
 
 ---
 

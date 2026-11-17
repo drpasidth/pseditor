@@ -92,6 +92,7 @@ const sep = () => (S.platform === "win32" ? "\\" : "/");
 // ---------------------------------------------------------------- modal
 function openModal(title, body, buttons = []) {
   const m = $("#modal");
+  m.classList.remove("modal-help");
   m.innerHTML = `<div class="m-head"><span>${esc(title)}</span><button id="m-x">&times;</button></div><div class="m-body"></div><div class="m-foot"></div>`;
   $(".m-body", m).appendChild(body);
   const foot = $(".m-foot", m);
@@ -106,7 +107,11 @@ function openModal(title, body, buttons = []) {
   $("#m-x").onclick = closeModal;
   $("#modal-bg").classList.remove("hidden");
 }
-function closeModal() { $("#modal-bg").classList.add("hidden"); $("#modal").innerHTML = ""; }
+function closeModal() {
+  $("#modal-bg").classList.add("hidden");
+  $("#modal").innerHTML = "";
+  $("#modal").classList.remove("modal-help");
+}
 $("#modal-bg").addEventListener("mousedown", e => { if (e.target.id === "modal-bg") closeModal(); });
 const modalOpen = () => !$("#modal-bg").classList.contains("hidden");
 
@@ -1779,6 +1784,43 @@ function openOcrSettings() {
 $("#btn-ocr").onclick = () => openOcrSettings();
 $("#image-ocr-settings").onclick = () => openOcrSettings();
 
+function openHelp(lang) {
+  const chosen = lang || localStorage.getItem("pseditor.help") || "en";
+  const body = document.createElement("div");
+  body.className = "help-wrap";
+  body.innerHTML = `
+    <div class="help-lang">
+      <button type="button" data-lang="en">English</button>
+      <button type="button" data-lang="th">ไทย</button>
+    </div>
+    <article id="help-doc" class="help-doc">Loading…</article>`;
+  openModal("User manual", body);
+  $("#modal").classList.add("modal-help");
+  const doc = $("#help-doc", body);
+  body.addEventListener("click", e => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (!href.startsWith("#")) return;
+    e.preventDefault();
+    const target = doc.querySelector("#" + CSS.escape(decodeURIComponent(href.slice(1))));
+    if (target) target.scrollIntoView({ block: "start" });
+  });
+  const load = async (code) => {
+    localStorage.setItem("pseditor.help", code);
+    $$(".help-lang button", body).forEach(b => b.classList.toggle("primary", b.dataset.lang === code));
+    doc.textContent = "Loading…";
+    try {
+      const r = await api("/api/help?lang=" + encodeURIComponent(code));
+      doc.innerHTML = r.html;
+      doc.scrollTop = 0;
+    } catch (e) { doc.textContent = e.message; }
+  };
+  $$(".help-lang button", body).forEach(b => { b.onclick = () => load(b.dataset.lang); });
+  load(chosen === "th" ? "th" : "en");
+}
+$("#btn-help").onclick = () => openHelp();
+
 $("#image-ocr-btn").onclick = async () => {
   if (!S.ws || !S.active || S.active.kind !== "image") return;
   const btn = $("#image-ocr-btn");
@@ -1825,7 +1867,11 @@ window.addEventListener("keydown", e => {
   // Inside the real terminal Ctrl+P / Ctrl+L / Ctrl+S ... belong to the shell; only Ctrl+` is ours.
   if (e.key !== "`" && e.target && e.target.closest && e.target.closest("#term-xterm")) return;
   const mod = e.ctrlKey || e.metaKey;
-  if (!mod) { if (e.key === "Escape" && modalOpen()) closeModal(); return; }
+  if (!mod) {
+    if (e.key === "Escape" && modalOpen()) closeModal();
+    else if (e.key === "F1") { e.preventDefault(); openHelp(); }
+    return;
+  }
   const k = e.key.toLowerCase();
   if (k === "s") { e.preventDefault(); saveActive(); }
   else if (k === "p") { e.preventDefault(); quickOpen(); }

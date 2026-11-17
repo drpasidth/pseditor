@@ -16,6 +16,7 @@ from django.views.decorators.http import require_http_methods
 
 from . import agents as agent_mod
 from . import approvals, ocr, ptyterm, shell
+from .manual import manual_html
 from .attachments import prepare_attachments
 from .fsops import FsError, WorkspaceFS, folder_label
 from .models import Agent, ChatMessage, ChatSession, Workspace
@@ -86,6 +87,15 @@ def _static_version():
 @ensure_csrf_cookie
 def index(request):
     return render(request, "editor/index.html", {"static_version": _static_version()})
+
+
+@api(["GET"])
+def help_manual(request):
+    """The user manual, rendered from USER_MANUAL.md or USER_MANUAL_TH.md."""
+    lang = (request.GET.get("lang") or "en").strip().lower()
+    if lang not in ("en", "th"):
+        lang = "en"
+    return JsonResponse({"lang": lang, "html": manual_html(lang)})
 
 
 @api(["GET"])

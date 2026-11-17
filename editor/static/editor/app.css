@@ -200,6 +200,22 @@ input:not([type]), input[type="text"], input[type="search"], input[type="passwor
 #ctxmenu div:hover { background: var(--accent2); }
 #modal-bg { position: fixed; inset: 0; background: #0009; z-index: 60; display: flex; align-items: center; justify-content: center; }
 #modal { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; width: min(860px, 94vw); max-height: 88vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px #000c; }
+#modal.modal-help { width: min(980px, 96vw); height: min(860px, 90vh); }
+.help-lang { display: flex; gap: 6px; margin-bottom: 10px; position: sticky; top: 0; background: var(--bg2); padding-bottom: 6px; }
+.help-doc h1 { font-size: 22px; margin: 0 0 10px; }
+.help-doc h2 { font-size: 16px; margin: 18px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.help-doc h3 { font-size: 14px; margin: 14px 0 6px; }
+.help-doc p, .help-doc li { line-height: 1.45; }
+.help-doc ul, .help-doc ol { margin: 6px 0 10px; padding-left: 22px; }
+.help-doc a { color: var(--accent); }
+.help-doc code { background: #111; padding: 0 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }
+.help-doc pre { background: #111; padding: 10px; overflow: auto; border-radius: 6px; }
+.help-doc pre code { background: transparent; padding: 0; }
+.help-doc table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; }
+.help-doc th, .help-doc td { border: 1px solid var(--line); padding: 4px 6px; vertical-align: top; text-align: left; }
+.help-doc th { background: var(--bg3); }
+.help-doc blockquote { margin: 8px 0; padding: 4px 10px; border-left: 3px solid var(--accent); color: var(--dim); }
+.help-doc hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
 .m-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .m-body { padding: 14px; overflow: auto; }
 .m-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); }
