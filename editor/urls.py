@@ -1,0 +1,37 @@
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path("", views.index, name="index"),
+    path("api/bootstrap", views.bootstrap),
+    path("api/workspaces", views.workspaces),
+    path("api/workspaces/<int:ws_id>", views.workspace_detail),
+    path("api/workspaces/<int:ws_id>/folders", views.workspace_folders),
+    path("api/browse", views.browse),
+    path("api/ws/<int:ws_id>/tree", views.tree),
+    path("api/ws/<int:ws_id>/files", views.file_list),
+    path("api/ws/<int:ws_id>/file", views.file_view),
+    path("api/ws/<int:ws_id>/preview", views.preview),
+    path("api/ws/<int:ws_id>/ocr", views.ocr_view),
+    path("api/ocr-settings", views.ocr_settings),
+    path("api/ocr-settings/test", views.ocr_test),
+    path("api/ws/<int:ws_id>/search", views.search),
+    path("api/ws/<int:ws_id>/terminal", views.terminal),
+    path("api/ws/<int:ws_id>/pty/open", views.pty_open),
+    path("api/ws/<int:ws_id>/pty/input", views.pty_input),
+    path("api/ws/<int:ws_id>/pty/resize", views.pty_resize),
+    path("api/ws/<int:ws_id>/pty/read", views.pty_read),
+    path("api/ws/<int:ws_id>/sessions", views.sessions),
+    path("api/models", views.models_list),
+    path("api/agents", views.agents),
+    path("api/agents/<int:agent_id>", views.agent_detail),
+    path("api/agents/<int:agent_id>/test", views.agent_test),
+    path("api/agents/<int:agent_id>/model", views.agent_model),
+    path("api/agents/<int:agent_id>/default", views.agent_default),
+    path("api/sessions/<int:session_id>", views.session_detail),
+    path("api/sessions/<int:session_id>/chat", views.chat),
+    path("api/sessions/<int:session_id>/stop", views.session_stop),
+    path("api/approvals/<str:approval_id>", views.approval_decide),
+    path("api/messages/<int:message_id>/revert", views.message_revert),
+]

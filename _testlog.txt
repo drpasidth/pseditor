@@ -1,0 +1,105 @@
+Creating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+Found 47 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: messages, staticfiles
+  Apply all migrations: admin, auth, contenttypes, editor, sessions
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying auth.0001_initial... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying editor.0001_initial... OK
+  Applying editor.0002_workspace_folders... OK
+  Applying editor.0003_default_openrouter_agent... OK
+  Applying sessions.0001_initial...test_add_folder_to_workspace (editor.tests.EditorTests.test_add_folder_to_workspace) ... ok
+test_agent_http_error_reported (editor.tests.EditorTests.test_agent_http_error_reported) ... ok
+test_agent_run_command_stays_confined_to_workspace (editor.tests.EditorTests.test_agent_run_command_stays_confined_to_workspace) ... ok
+test_agent_tools_cannot_escape_workspace (editor.tests.EditorTests.test_agent_tools_cannot_escape_workspace) ... ok
+test_agent_validation_and_default (editor.tests.EditorTests.test_agent_validation_and_default) ... ok
+test_anthropic_agent (editor.tests.EditorTests.test_anthropic_agent) ... ok
+test_approval_denied_action_is_not_run_and_the_agent_is_told_why (editor.tests.EditorTests.test_approval_denied_action_is_not_run_and_the_agent_is_told_why) ... ok
+test_approval_endpoints (editor.tests.EditorTests.test_approval_endpoints) ... ok
+test_approval_is_on_by_default (editor.tests.EditorTests.test_approval_is_on_by_default) ... ok
+test_approval_nothing_runs_until_the_user_approves (editor.tests.EditorTests.test_approval_nothing_runs_until_the_user_approves) ... ok
+test_approval_reads_are_free_unless_configured (editor.tests.EditorTests.test_approval_reads_are_free_unless_configured) ... ok
+test_approval_stop_releases_the_waiting_action (editor.tests.EditorTests.test_approval_stop_releases_the_waiting_action) ... ok
+test_approval_timeout_runs_nothing (editor.tests.EditorTests.test_approval_timeout_runs_nothing) ... ok
+test_approval_webhook_and_cli_agents_are_gated (editor.tests.EditorTests.test_approval_webhook_and_cli_agents_are_gated) ... ok
+test_chat_rejects_unsupported_attachment (editor.tests.EditorTests.test_chat_rejects_unsupported_attachment) ... ok
+test_chat_sends_attachments_to_the_model (editor.tests.EditorTests.test_chat_sends_attachments_to_the_model) ... ok
+test_cli_agent_detects_changes (editor.tests.EditorTests.test_cli_agent_detects_changes) ... ok
+test_cli_agent_receives_attachment_text (editor.tests.EditorTests.test_cli_agent_receives_attachment_text) ... ok
+test_file_crud (editor.tests.EditorTests.test_file_crud) ... ok
+test_index_and_bootstrap (editor.tests.EditorTests.test_index_and_bootstrap) ... ok
+test_list_models (editor.tests.EditorTests.test_list_models) ... ok
+test_model_can_read_write_update_in_added_folder (editor.tests.EditorTests.test_model_can_read_write_update_in_added_folder) ... ok
+test_model_override_per_request (editor.tests.EditorTests.test_model_override_per_request) ... ok
+test_openai_agent_tool_loop_and_revert (editor.tests.EditorTests.test_openai_agent_tool_loop_and_revert) ... ok
+test_openrouter_is_seeded_as_default_agent (editor.tests.EditorTests.test_openrouter_is_seeded_as_default_agent) ... ok
+test_openrouter_key_never_sent_to_openai (editor.tests.EditorTests.test_openrouter_key_never_sent_to_openai) ... ok
+test_path_traversal_blocked (editor.tests.EditorTests.test_path_traversal_blocked) ... ok
+test_prepare_attachments_reads_image_pdf_excel_and_word (editor.tests.EditorTests.test_prepare_attachments_reads_image_pdf_excel_and_word) ... ok
+test_pty_ctrl_c_interrupts_running_command (editor.tests.EditorTests.test_pty_ctrl_c_interrupts_running_command) ... FAIL
+test_pty_django_createsuperuser_is_interactive (editor.tests.EditorTests.test_pty_django_createsuperuser_is_interactive) ... ok
+test_pty_http_api (editor.tests.EditorTests.test_pty_http_api) ... ok
+test_pty_is_a_real_tty_with_interactive_input (editor.tests.EditorTests.test_pty_is_a_real_tty_with_interactive_input) ... ok
+test_pty_output_offsets_resize_and_scrollback (editor.tests.EditorTests.test_pty_output_offsets_resize_and_scrollback) ... ok
+test_pty_respects_disabled_setting (editor.tests.EditorTests.test_pty_respects_disabled_setting) ... ok
+test_pty_runs_commands_and_prompt_is_the_real_folder (editor.tests.EditorTests.test_pty_runs_commands_and_prompt_is_the_real_folder) ... ok
+test_pty_shell_dies_with_an_abruptly_killed_server (editor.tests.EditorTests.test_pty_shell_dies_with_an_abruptly_killed_server) ... ok
+test_pty_venv_activation_spellings_show_prefix (editor.tests.EditorTests.test_pty_venv_activation_spellings_show_prefix) ... Actual environment location may have moved due to redirects, links or junctions.
+  Requested location: "C:\Users\ADMINS~1\AppData\Local\Temp\tmp9k17lycj\venv\Scripts\python.exe"
+  Actual location:    "C:\Users\ADMINSTRATOR\AppData\Local\Temp\tmp9k17lycj\venv\Scripts\python.exe"
+ok
+test_search (editor.tests.EditorTests.test_search) ... ok
+test_single_folder_workspace_info (editor.tests.EditorTests.test_single_folder_workspace_info) ... ok
+test_terminal_disabled_setting (editor.tests.EditorTests.test_terminal_disabled_setting) ... ok
+test_terminal_interrupt_and_timeout (editor.tests.EditorTests.test_terminal_interrupt_and_timeout) ... ok
+test_terminal_prompt_is_real_path_and_cd_is_unrestricted (editor.tests.EditorTests.test_terminal_prompt_is_real_path_and_cd_is_unrestricted) ... ok
+test_terminal_state_persists_and_reports_exit_codes (editor.tests.EditorTests.test_terminal_state_persists_and_reports_exit_codes) ... ok
+test_terminal_venv_activation_shows_prefix (editor.tests.EditorTests.test_terminal_venv_activation_shows_prefix) ... Actual environment location may have moved due to redirects, links or junctions.
+  Requested location: "C:\Users\ADMINS~1\AppData\Local\Temp\tmp6k2jwueh\venv\Scripts\python.exe"
+  Actual location:    "C:\Users\ADMINSTRATOR\AppData\Local\Temp\tmp6k2jwueh\venv\Scripts\python.exe"
+ok
+test_terminal_venv_activation_spellings (editor.tests.EditorTests.test_terminal_venv_activation_spellings) ... Actual environment location may have moved due to redirects, links or junctions.
+  Requested location: "C:\Users\ADMINS~1\AppData\Local\Temp\tmp_57b5gqc\venv\Scripts\python.exe"
+  Actual location:    "C:\Users\ADMINSTRATOR\AppData\Local\Temp\tmp_57b5gqc\venv\Scripts\python.exe"
+ok
+test_webhook_agent (editor.tests.EditorTests.test_webhook_agent) ... ok
+test_webhook_receives_attachment_text_and_image (editor.tests.EditorTests.test_webhook_receives_attachment_text_and_image) ... ok
+
+======================================================================
+FAIL: test_pty_ctrl_c_interrupts_running_command (editor.tests.EditorTests.test_pty_ctrl_c_interrupts_running_command)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\pseditor\editor\tests.py", line 368, in test_pty_ctrl_c_interrupts_running_command
+    self.wait_for(s, "after", timeout=8)  # would take 60s if the sleep were not interrupted
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\pseditor\editor\tests.py", line 329, in wait_for
+    self.fail(f"{text!r} not seen within {timeout}s; got: {out[-600:]!r}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'after' not seen within 8s; got: 'g8ufyt5> \x1b[?25l\x1b[1;55H\x1b[93mStart\x1b[37m\x1b[40m\x1b[0m\x1b[1;60H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-\x1b[37m\x1b[40m\x1b[0m\x1b[1;61H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-S\x1b[37m\x1b[40m\x1b[0m\x1b[1;62H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sl\x1b[37m\x1b[40m\x1b[0m\x1b[1;63H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sle\x1b[37m\x1b[40m\x1b[0m\x1b[1;64H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Slee\x1b[37m\x1b[40m\x1b[0m\x1b[1;65H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m\x1b[0m\x1b[1;66H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[37m\x1b[40m\x1b[0m\x1b[1;67H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[97m6\x1b[37m\x1b[40m\x1b[0m\x1b[1;68H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[97m60\x1b[37m\x1b[40m\x1b[0m\x1b[1;69H\x1b[?25h\x1b[2;1H'
+
+----------------------------------------------------------------------
+Ran 47 tests in 94.316s
+
+FAILED (failures=1)
+Destroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+ OK
+System check identified no issues (0 silenced).

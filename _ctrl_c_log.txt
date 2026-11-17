@@ -1,0 +1,21 @@
+Creating test database for alias 'default'...
+F
+======================================================================
+FAIL: test_pty_ctrl_c_interrupts_running_command (editor.tests.EditorTests.test_pty_ctrl_c_interrupts_running_command)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "E:\pseditor\editor\tests.py", line 368, in test_pty_ctrl_c_interrupts_running_command
+    self.wait_for(s, "after", timeout=8)  # would take 60s if the sleep were not interrupted
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\pseditor\editor\tests.py", line 329, in wait_for
+    self.fail(f"{text!r} not seen within {timeout}s; got: {out[-600:]!r}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'after' not seen within 8s; got: 'ph0z83b> \x1b[?25l\x1b[1;55H\x1b[93mStart\x1b[37m\x1b[40m\x1b[0m\x1b[1;60H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-\x1b[37m\x1b[40m\x1b[0m\x1b[1;61H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-S\x1b[37m\x1b[40m\x1b[0m\x1b[1;62H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sl\x1b[37m\x1b[40m\x1b[0m\x1b[1;63H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sle\x1b[37m\x1b[40m\x1b[0m\x1b[1;64H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Slee\x1b[37m\x1b[40m\x1b[0m\x1b[1;65H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m\x1b[0m\x1b[1;66H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[37m\x1b[40m\x1b[0m\x1b[1;67H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[97m6\x1b[37m\x1b[40m\x1b[0m\x1b[1;68H\x1b[?25h\x1b[?25l\x1b[1;55H\x1b[93mStart-Sleep\x1b[37m\x1b[40m \x1b[97m60\x1b[37m\x1b[40m\x1b[0m\x1b[1;69H\x1b[?25h\x1b[2;1H'
+
+----------------------------------------------------------------------
+Ran 1 test in 11.490s
+
+FAILED (failures=1)
+Destroying test database for alias 'default'...
+Found 1 test(s).
+System check identified no issues (0 silenced).

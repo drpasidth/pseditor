@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
+*.sqlite3
+desktop.log
+ocr_settings.json
+.env
+.idea/
+.vscode/

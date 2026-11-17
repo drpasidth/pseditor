@@ -1,0 +1,139 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PSEditor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="{% static 'editor/app.css' %}?v={{ static_version }}">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">PS<span>Editor</span></div>
+    <button id="btn-open" class="tb">&#128193; <span id="ws-name">Open folder…</span></button>
+    <button id="btn-quick" class="tb" title="Ctrl+P">Go to file</button>
+    <button id="btn-term" class="tb" title="Ctrl+`">Terminal</button>
+    <div class="spacer"></div>
+    <button id="btn-chat" class="tb" title="Ctrl+L">AI Chat</button>
+    <button id="btn-ocr" class="tb icon-btn" title="OCR endpoint">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.7 1.1h2.6l.35 1.55c.36.1.7.26 1.01.46l1.45-.67 1.3 2.25-1.15 1.1c.07.32.1.64.1 1.01s-.03.69-.1 1.01l1.15 1.1-1.3 2.25-1.45-.67c-.31.2-.65.36-1.01.46L9.3 14.9H6.7l-.35-1.55a4.4 4.4 0 0 1-1.01-.46l-1.45.67-1.3-2.25 1.15-1.1A4.6 4.6 0 0 1 3.64 8c0-.37.03-.69.1-1.01l-1.15-1.1 1.3-2.25 1.45.67c.31-.2.65-.36 1.01-.46L6.7 1.1zM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 0 0 0-3.7z"/></svg>
+    </button>
+    <button id="btn-settings" class="tb">&#9881; Agents</button>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="side-tabs">
+        <button class="side-tab active" data-pane="explorer">Explorer</button>
+        <button class="side-tab" data-pane="search">Search</button>
+      </div>
+      <div id="pane-explorer" class="pane">
+        <div class="pane-actions">
+          <button id="new-file" title="New file">+ File</button>
+          <button id="new-folder" title="Create a new subfolder">+ New folder</button>
+          <button id="add-root" title="Add a folder from this computer to the workspace (the model can access it)">&#128193; Add to workspace</button>
+          <button id="refresh" title="Refresh">&#8635;</button>
+        </div>
+        <div id="tree"></div>
+      </div>
+      <div id="pane-search" class="pane hidden">
+        <input id="search-q" placeholder="Search in files (Enter)">
+        <div class="search-opts">
+          <label><input type="checkbox" id="search-regex"> regex</label>
+          <label><input type="checkbox" id="search-case"> case</label>
+          <input id="search-glob" placeholder="files: *.py">
+        </div>
+        <div id="search-results"></div>
+      </div>
+    </aside>
+    <div class="resizer" id="rz-left"></div>
+
+    <section id="center">
+      <div id="tabs"></div>
+      <div id="editor-wrap">
+        <div id="editor"></div>
+        <div id="image-view" class="hidden">
+          <img id="image-view-img" alt="">
+          <pre id="image-ocr" class="hidden"></pre>
+          <div id="image-view-bar">
+            <button type="button" id="image-ocr-settings" class="icon-btn" title="Set OCR endpoint">
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6.7 1.1h2.6l.35 1.55c.36.1.7.26 1.01.46l1.45-.67 1.3 2.25-1.15 1.1c.07.32.1.64.1 1.01s-.03.69-.1 1.01l1.15 1.1-1.3 2.25-1.45-.67c-.31.2-.65.36-1.01.46L9.3 14.9H6.7l-.35-1.55a4.4 4.4 0 0 1-1.01-.46l-1.45.67-1.3-2.25 1.15-1.1A4.6 4.6 0 0 1 3.64 8c0-.37.03-.69.1-1.01l-1.15-1.1 1.3-2.25 1.45.67c.31-.2.65-.36 1.01-.46L6.7 1.1zM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 0 0 0-3.7z"/></svg>
+            </button>
+            <button type="button" id="image-ocr-btn" class="hidden" title="Send this image to the OCR endpoint in settings">Read text</button>
+            <div id="image-view-meta"></div>
+          </div>
+        </div>
+        <div id="welcome">
+          <h1>PSEditor</h1>
+          <p>Open a folder, edit your code, and let connected agents write it for you.</p>
+          <p class="hint">Ctrl+P go to file &middot; Ctrl+S save &middot; Ctrl+L chat &middot; Ctrl+` terminal</p>
+        </div>
+      </div>
+      <div class="resizer h" id="rz-term"></div>
+      <div id="terminal" class="hidden">
+        <div id="term-xterm" class="hidden"></div>
+        <div id="term-out"></div>
+        <div id="term-line"><span id="term-prompt">&gt;</span><input id="term-in" autocomplete="off" spellcheck="false"></div>
+      </div>
+    </section>
+
+    <div class="resizer" id="rz-right"></div>
+    <aside id="chat">
+      <div class="chat-head">
+        <select id="agent-select" title="Agent (your choice is saved)"></select>
+        <select id="session-select" title="Conversation"></select>
+        <button id="chat-new" title="New chat">+</button>
+        <button id="chat-del" title="Delete chat">&#128465;</button>
+      </div>
+      <div class="chat-head2" id="model-row">
+        <input id="model-input" autocomplete="off" placeholder="model (click to choose)" title="Model for this agent (your choice is saved)">
+        <button id="model-load" title="Load the provider's model list">Models ▾</button>
+      </div>
+      <div class="ws-row" title="Folders the model can read, write and update">
+        <span class="ws-label">Workspace</span>
+        <div id="ws-folders"><span class="hint">No workspace open</span></div>
+        <button id="chat-add-folder" title="Add a folder to the workspace">+ Add folder</button>
+      </div>
+      <div id="messages"></div>
+      <div class="composer">
+        <div class="composer-opts">
+          <label class="ctx"><input type="checkbox" id="ctx-file" checked> include open file / selection</label>
+          <label class="ctx" title="How deeply the model reasons before it answers. Off leaves the request unchanged. OpenRouter and Claude use this; other local models ignore it.">Thinking
+            <select id="think-level">
+              <option value="off">Off</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label class="ctx" title="Show or hide the model's thinking in this chat"><input type="checkbox" id="think-show" checked> Show thinking</label>
+        </div>
+        <div id="attach-list" class="attach-list hidden"></div>
+        <textarea id="prompt" rows="3" title="Enter to send, Shift+Enter for a new line. Up and Down recall previous prompts so you can edit and send them again." placeholder="Ask the agent to build or change something…  (Enter to send, Shift+Enter for a new line. Up/Down recalls a previous prompt. You can also attach an image, PDF, Excel or Word file.)"></textarea>
+        <div class="composer-row">
+          <button type="button" id="attach" title="Attach an image, PDF, Excel or Word file">Attach</button>
+          <input id="attach-file" type="file" multiple hidden
+                 accept=".png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.xlsx,.xlsm,.xls,.docx,.doc,image/png,image/jpeg,image/gif,image/webp,image/bmp,application/pdf">
+          <span id="chat-status"></span>
+          <button id="stop" class="hidden">Stop</button>
+          <button id="send" class="primary">Send</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <footer id="statusbar"><span id="st-left">Ready</span><span id="st-right"></span></footer>
+</div>
+
+<div id="ctxmenu" class="hidden"></div>
+<div id="modal-bg" class="hidden"><div id="modal"></div></div>
+<div id="toast"></div>
+
+<!-- xterm must load BEFORE Monaco's AMD loader, otherwise its UMD build registers as an AMD module
+     and the global `Terminal` is never created. -->
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+<script src="{% static 'editor/app.js' %}?v={{ static_version }}"></script>
+</body>
+</html>
