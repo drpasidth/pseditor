@@ -132,6 +132,10 @@ class Agent(models.Model):
     )
     api_key = models.CharField(max_length=500, blank=True)
     model = models.CharField(max_length=200, blank=True)
+    image_model = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Model used by generate_image. Blank uses the built-in default.",
+    )
     command = models.CharField(
         max_length=1000, blank=True,
         help_text="CLI template. Use {prompt} to inject the prompt, otherwise it is sent on stdin.",
@@ -164,6 +168,7 @@ class Agent(models.Model):
             "provider": self.provider,
             "base_url": self.base_url,
             "model": self.model,
+            "image_model": self.image_model,
             "command": self.command,
             "system_prompt": self.system_prompt,
             "temperature": self.temperature,

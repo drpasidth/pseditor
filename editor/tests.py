@@ -207,6 +207,22 @@ class EditorTests(TestCase):
         self.assertEqual(self.j("delete", base, {"path": "pkg"}).status_code, 200)
         self.assertFalse((self.root / "pkg").exists())
 
+    def test_open_with_asks_the_system_and_stays_in_the_workspace(self):
+        import sys
+        (self.root / "deck.pptx").write_bytes(b"PK\x03\x04")
+        with mock.patch("editor.openwith.subprocess.Popen") as popen:
+            ok = self.j("post", f"/api/ws/{self.ws}/open-with", {"path": "deck.pptx"})
+        self.assertEqual(ok.status_code, 200, ok.content)
+        cmd = popen.call_args.args[0]
+        self.assertEqual(cmd[-1], str(self.root / "deck.pptx"))
+        if sys.platform == "win32":
+            self.assertIn("SHOpenWithDialog", cmd[2])
+        with mock.patch("editor.openwith.subprocess.Popen") as popen:
+            blocked = self.j("post", f"/api/ws/{self.ws}/open-with", {"path": "../outside.pptx"})
+        self.assertEqual(blocked.status_code, 400)
+        popen.assert_not_called()
+        self.assertFalse((self.root.parent / "outside.pptx").exists())
+
     def test_png_opens_as_an_image(self):
         png = _png_bytes()
         (self.root / "shot.png").write_bytes(png)
@@ -1069,9 +1085,10 @@ class EditorTests(TestCase):
 
     def test_approval_is_on_by_default(self):
         with self.settings(PSEDITOR_REQUIRE_APPROVAL=True):
-            for name in ("write_file", "edit_file", "delete_file", "run_command", "cli_agent", "anything_else"):
+            for name in ("write_file", "edit_file", "delete_file", "generate_image", "run_command", "cli_agent", "anything_else"):
                 self.assertTrue(approvals.required(name), name)
-            for name in ("read_file", "list_files", "search", "workspace_info"):
+            for name in ("read_file", "list_files", "search", "workspace_info",
+                         "list_datasets", "profile_data", "query_data", "sql_query", "extract_document"):
                 self.assertFalse(approvals.required(name), name)
         # the shipped project setting must stay on
         from pseditor import settings as project_settings
@@ -1309,3 +1326,167 @@ class EditorTests(TestCase):
         ok, info = ToolContext(WorkspaceFS(self.root)).execute("workspace_info", {})
         self.assertTrue(ok)
         self.assertIn(str(self.root.resolve()), info)
+
+    def test_analytics_profiles_groups_and_rejects_writes(self):
+        import sqlite3
+        from openpyxl import Workbook
+        (self.root / "sales.csv").write_text("region,amount\nNorth,10\nNorth,5\nSouth,7\n", encoding="utf-8")
+        prof = self.j("post", f"/api/ws/{self.ws}/analyze", {"op": "profile", "path": "sales.csv"})
+        self.assertEqual(prof.status_code, 200, prof.content)
+        amount = next(c for c in prof.json()["columns"] if c["name"] == "amount")
+        self.assertEqual(prof.json()["row_count"], 3)
+        self.assertEqual(amount["sum"], 22)
+        grouped = self.j("post", f"/api/ws/{self.ws}/analyze", {
+            "op": "query", "path": "sales.csv", "group_by": ["region"],
+            "metrics": [{"column": "amount", "fn": "sum"}],
+        })
+        self.assertEqual(
+            {row["region"]: row["sum_amount"] for row in grouped.json()["rows"]},
+            {"North": 15, "South": 7},
+        )
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sales"
+        ws.append(["region", "amount"])
+        ws.append(["North", 10])
+        ws.append(["South", 4])
+        wb.save(self.root / "book.xlsx")
+        sheet = self.j("post", f"/api/ws/{self.ws}/analyze", {"op": "profile", "path": "book.xlsx", "sheet": "Sales"})
+        self.assertEqual(sheet.json()["row_count"], 2)
+        self.assertEqual(next(c["sum"] for c in sheet.json()["columns"] if c["name"] == "amount"), 14)
+
+        db = self.root / "books.sqlite"
+        con = sqlite3.connect(db)
+        con.execute("create table sales (region text, amount int)")
+        con.execute("insert into sales values ('North', 2), ('South', 3)")
+        con.commit()
+        con.close()
+        total = self.j("post", f"/api/ws/{self.ws}/analyze", {
+            "op": "sql", "path": "books.sqlite", "sql": "SELECT sum(amount) AS total FROM sales",
+        })
+        self.assertEqual(total.status_code, 200, total.content)
+        self.assertEqual(total.json()["rows"][0]["total"], 5)
+        denied = self.j("post", f"/api/ws/{self.ws}/analyze", {
+            "op": "sql", "path": "books.sqlite", "sql": "DROP TABLE sales",
+        })
+        self.assertEqual(denied.status_code, 400)
+        con = sqlite3.connect(db)
+        self.assertEqual(con.execute("select count(*) from sales").fetchone()[0], 2)
+        con.close()
+
+    def test_analytics_reads_invoice_and_financial_statement(self):
+        from docx import Document
+        (self.root / "inv.pdf").write_bytes(_pdf_bytes("Invoice No: INV-9 Grand Total: 107.00"))
+        invoice = self.j("post", f"/api/ws/{self.ws}/analyze", {"op": "extract", "path": "inv.pdf"})
+        self.assertEqual(invoice.status_code, 200, invoice.content)
+        fields = {f["name"]: f["value"] for f in invoice.json()["fields"]}
+        self.assertEqual(fields["invoice_no"], "INV-9")
+        self.assertEqual(fields["total"], 107)
+        doc = Document()
+        doc.add_paragraph("Income statement")
+        doc.add_paragraph("Revenue 1,000")
+        doc.add_paragraph("Net income 250")
+        doc.save(self.root / "stmt.docx")
+        statement = self.j("post", f"/api/ws/{self.ws}/analyze", {"op": "extract", "path": "stmt.docx"})
+        values = {f["name"]: f["value"] for f in statement.json()["fields"]}
+        self.assertEqual(statement.json()["document_kind"], "financial")
+        self.assertEqual(values["revenue"], 1000)
+        self.assertEqual(values["net_income"], 250)
+        (self.root / "shot.png").write_bytes(_png_bytes())
+        with mock.patch("editor.ocr.recognize_bytes", return_value="Receipt\nTotal: 50.00"):
+            with mock.patch("editor.ocr.endpoint", return_value="http://ocr.local/read"):
+                image = self.j("post", f"/api/ws/{self.ws}/analyze", {"op": "extract", "path": "shot.png"})
+        self.assertEqual(image.status_code, 200, image.content)
+        self.assertEqual({f["name"]: f["value"] for f in image.json()["fields"]}["total"], 50)
+
+    def test_analytics_mode_sends_analysis_tools(self):
+        self.j("post", "/api/agents", {"name": "or", "provider": "openai", "model": "m",
+                                       "base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-abc"})
+        sid = self._session()
+        with mock.patch("editor.agents.requests.post",
+                        return_value=FakeResp({"choices": [{"message": {"content": "hi"}}]})) as post:
+            stream_events(self.j("post", f"/api/sessions/{sid}/chat", {"message": "total?", "analytics": True}))
+        payload = post.call_args.kwargs["json"]
+        names = [t["function"]["name"] for t in payload["tools"]]
+        self.assertIn("query_data", names)
+        self.assertIn("extract_document", names)
+        self.assertIn("Analytics mode is on", payload["messages"][0]["content"])
+        with mock.patch("editor.agents.requests.post",
+                        return_value=FakeResp({"choices": [{"message": {"content": "hi"}}]})) as post:
+            stream_events(self.j("post", f"/api/sessions/{sid}/chat", {"message": "edit the code"}))
+        names = [t["function"]["name"] for t in post.call_args.kwargs["json"]["tools"]]
+        self.assertNotIn("query_data", names)
+        self.assertIn("read_file", names)
+        self.assertIn("generate_image", names)
+
+    def test_generate_image_saves_a_png_and_needs_approval(self):
+        from .agents import build_system_prompt
+        from .fsops import WorkspaceFS
+        from .imagegen import endpoint_for, model_for
+        from .tools import ToolContext
+        png = _png_bytes()
+        agent = Agent(name="img", provider="openai", base_url="https://openrouter.ai/api/v1",
+                      api_key="sk-test", model="chat-model", image_model="google/gemini-2.5-flash-image")
+        with self.settings(PSEDITOR_REQUIRE_APPROVAL=True):
+            self.assertTrue(approvals.required("generate_image"))
+        self.assertEqual(endpoint_for(agent.base_url), ("https://openrouter.ai/api/v1/images", "openrouter"))
+        self.assertEqual(endpoint_for("https://api.openai.com/v1"),
+                         ("https://api.openai.com/v1/images/generations", "openai"))
+        self.assertEqual(model_for(Agent(provider="openai", base_url="https://api.openai.com/v1", model="m")), "m")
+        self.assertEqual(model_for(agent), "google/gemini-2.5-flash-image")
+        ctx = ToolContext(WorkspaceFS(self.root), agent)
+        body = {"data": [{"b64_json": _b64(png), "media_type": "image/png"}]}
+        with mock.patch("editor.imagegen.requests.post", return_value=FakeResp(body)) as post:
+            ok, msg = ctx.execute("generate_image", {"prompt": "a red panda in space", "aspect_ratio": "16:9"})
+        self.assertTrue(ok, msg)
+        saved = self.root / "images" / "a-red-panda-in-space.png"
+        self.assertTrue(saved.is_file(), msg)
+        self.assertTrue(saved.read_bytes().startswith(b"\x89PNG"))
+        sent = post.call_args.kwargs["json"]
+        self.assertEqual(sent["model"], "google/gemini-2.5-flash-image")
+        self.assertEqual(sent["aspect_ratio"], "16:9")
+        self.assertEqual(sent["output_format"], "png")
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer sk-test")
+        with mock.patch("editor.imagegen.requests.post", return_value=FakeResp(body)):
+            ok, msg = ctx.execute("generate_image", {"prompt": "a red panda in space"})
+        self.assertTrue(ok, msg)
+        self.assertTrue((self.root / "images" / "a-red-panda-in-space-2.png").is_file())
+        self.assertEqual(saved.read_bytes(), png)
+        ok, msg = ctx.execute("generate_image", {"path": "../escape.png", "prompt": "x"})
+        self.assertFalse(ok)
+        self.assertFalse((self.root.parent / "escape.png").exists())
+        with mock.patch("editor.imagegen.requests.post",
+                        return_value=FakeResp({"error": {"message": "no credits"}}, 402)):
+            ok, msg = ctx.execute("generate_image", {"prompt": "a cat"})
+        self.assertFalse(ok)
+        self.assertIn("no credits", msg)
+        bad = FakeResp({"error": {"message": "output_format is not supported"}}, 400)
+        with mock.patch("editor.imagegen.requests.post", side_effect=[bad, FakeResp(body)]) as post:
+            ok, msg = ctx.execute("generate_image", {"prompt": "retry me"})
+        self.assertTrue(ok, msg)
+        self.assertNotIn("output_format", post.call_args_list[1].kwargs["json"])
+        bare = Agent(name="nokey", provider="openai", base_url="https://openrouter.ai/api/v1", model="m")
+        ok, msg = ToolContext(WorkspaceFS(self.root), bare).execute("generate_image", {"prompt": "x"})
+        self.assertFalse(ok)
+        self.assertIn("API key", msg)
+        claude = Agent(name="c", provider="anthropic", model="claude", api_key="k")
+        ok, msg = ToolContext(WorkspaceFS(self.root), claude).execute("generate_image", {"prompt": "x"})
+        self.assertFalse(ok)
+        self.assertIn("OpenAI-compatible", msg)
+        self.assertIn("generate_image", build_system_prompt(agent))
+        saved_agent = self.j("post", "/api/agents", {
+            "name": "painter", "provider": "openai", "model": "m",
+            "base_url": "https://openrouter.ai/api/v1", "image_model": "bytedance-seed/seedream-4.5",
+        }).json()
+        self.assertEqual(saved_agent["image_model"], "bytedance-seed/seedream-4.5")
+        same = self.j("post", "/api/agents", {
+            "name": "same-model", "provider": "openai", "model": "chat-model",
+            "base_url": "https://openrouter.ai/api/v1", "image_model": "chat-model",
+        }).json()
+        self.assertEqual(same["image_model"], "")
+        self.assertEqual(model_for(Agent.objects.get(pk=same["id"])), "chat-model")
+        changed = self.j("post", f"/api/agents/{same['id']}/image-model",
+                         {"image_model": "black-forest-labs/flux.2-pro"}).json()
+        self.assertEqual(changed["image_model"], "black-forest-labs/flux.2-pro")
+        followed = self.j("post", f"/api/agents/{same['id']}/image-model", {"image_model": "chat-model"}).json()
+        self.assertEqual(followed["image_model"], "")

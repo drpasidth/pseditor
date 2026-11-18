@@ -13,7 +13,10 @@ from django.conf import settings
 
 # Tools that only look at the workspace. Everything else (writes, deletes, commands, CLI/webhook agents)
 # always needs approval. Set PSEDITOR_APPROVE_READS = True to be asked about these too.
-READ_ONLY = frozenset({"workspace_info", "list_files", "read_file", "search"})
+READ_ONLY = frozenset({
+    "workspace_info", "list_files", "read_file", "search",
+    "list_datasets", "profile_data", "query_data", "sql_query", "extract_document",
+})
 
 ALLOW, DENY, CANCELLED, TIMEOUT = "allow", "deny", "cancelled", "timeout"
 

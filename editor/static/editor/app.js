@@ -78,6 +78,7 @@ const S = {
   termEnabled: true,
   pty: false,          // server can run a real terminal (pywinpty / pty)
   ocrEndpoint: "",     // PSEDITOR_OCR_ENDPOINT, empty when OCR is off
+  analytics: localStorage.getItem("pseditor.analytics") === "1",
   tree: {},            // dir path -> entries
   expanded: new Set(),
   tabs: [],
@@ -178,25 +179,31 @@ async function setupEditor() {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const TABLE_EXT = /\.(csv|tsv)$/i;
+const DATA_EXT = /\.(xlsx|xlsm|xls|sqlite3?|db|pdf|docx|doc)$/i;
 const isImagePath = path => IMAGE_EXT.test(path || "");
+const opensAsData = path => DATA_EXT.test(path || "") || (S.analytics && TABLE_EXT.test(path || ""));
 const tabValue = t => {
-  if (!t || t.kind === "image") return "";
+  if (!t || t.kind === "image" || t.kind === "data") return "";
   return Ed.monaco ? t.model.getValue() : t.value;
 };
 
+function showSurface(which) {
+  $("#editor").classList.toggle("hidden", which !== "editor");
+  $("#image-view").classList.toggle("hidden", which !== "image");
+  $("#data-view").classList.toggle("hidden", which !== "data");
+  if (which !== "image") $("#image-view-img").removeAttribute("src");
+  if (which === "editor" && Ed.monaco && Ed.ed) requestAnimationFrame(() => Ed.ed.layout());
+}
+
 function showImage(t) {
-  const view = $("#image-view");
   const img = $("#image-view-img");
   const meta = $("#image-view-meta");
   if (!t || t.kind !== "image") {
-    view.classList.add("hidden");
-    img.removeAttribute("src");
-    $("#editor").classList.remove("hidden");
-    if (Ed.monaco && Ed.ed) requestAnimationFrame(() => Ed.ed.layout());
+    if (!S.active || S.active.kind !== "data") showSurface("editor");
     return;
   }
-  $("#editor").classList.add("hidden");
-  view.classList.remove("hidden");
+  showSurface("image");
   const ocrBox = $("#image-ocr");
   ocrBox.textContent = "";
   ocrBox.classList.add("hidden");
@@ -217,8 +224,201 @@ function showImage(t) {
   img.src = `/api/ws/${S.ws.id}/preview?path=${enc(t.path)}&v=${t.rev || 0}`;
 }
 
+let dataToken = 0;
+async function showData(t, sheet) {
+  showSurface("data");
+  const token = ++dataToken;
+  $("#data-title").textContent = (t.path || "").split("/").pop();
+  $("#data-meta").textContent = "Reading…";
+  $("#data-fields").replaceChildren();
+  $("#data-table").replaceChildren();
+  $("#data-chart").classList.add("hidden");
+  $("#data-excerpt").classList.add("hidden");
+  const doc = /\.(pdf|docx|doc|png|jpe?g|gif|webp|bmp)$/i.test(t.path || "");
+  $("#data-query").classList.toggle("hidden", doc);
+  $("#data-sql").classList.add("hidden");
+  try {
+    const op = doc ? "extract" : "profile";
+    const body = { op, path: t.path };
+    if (!doc && sheet) body.sheet = sheet;
+    const r = await api(`/api/ws/${S.ws.id}/analyze`, { method: "POST", body });
+    if (token !== dataToken || S.active !== t) return;
+    if (doc) renderExtract(r);
+    else renderProfile(r);
+  } catch (e) {
+    if (token === dataToken) $("#data-meta").textContent = e.message;
+  }
+}
+
+function renderProfile(r) {
+  const n = r.row_count || 0;
+  const cols = (r.columns || []).length;
+  $("#data-meta").textContent = `${n} row${n === 1 ? "" : "s"} · ${cols} column${cols === 1 ? "" : "s"}` + (r.note ? " · " + r.note : "");
+  const sheet = $("#data-sheet");
+  const sheets = r.sheets || [];
+  sheet.classList.toggle("hidden", sheets.length < 2);
+  sheet.replaceChildren();
+  sheets.forEach(name => {
+    const o = document.createElement("option");
+    o.value = name;
+    o.textContent = name;
+    if (name === r.sheet) o.selected = true;
+    sheet.appendChild(o);
+  });
+  const db = r.source_kind === "database";
+  $("#data-sql").classList.toggle("hidden", !db);
+  if (db && !$("#data-sql-text").value.trim()) {
+    const table = String(r.sheet || "").replace(/"/g, "\"\"");
+    $("#data-sql-text").value = `SELECT * FROM "${table}" LIMIT 50`;
+  }
+  fillQuerySelects(r.columns || []);
+  renderBars($("#data-chart"), r.chart);
+  renderGrid($("#data-table"), r.preview_columns || (r.columns || []).map(c => c.name), r.preview || []);
+}
+
+function renderExtract(r) {
+  $("#data-query").classList.add("hidden");
+  $("#data-sql").classList.add("hidden");
+  $("#data-sheet").classList.add("hidden");
+  const kind = r.document_kind || "document";
+  const found = (r.fields || []).length;
+  $("#data-meta").textContent = found ? `${kind} · ${found} field${found === 1 ? "" : "s"}` : `${kind} · no labeled fields`;
+  const box = $("#data-fields");
+  box.replaceChildren();
+  (r.fields || []).forEach(f => {
+    const dt = document.createElement("dt");
+    dt.textContent = f.label || f.name;
+    const dd = document.createElement("dd");
+    dd.textContent = String(f.value) + (f.line ? " — " + f.line : "");
+    box.append(dt, dd);
+  });
+  const ex = $("#data-excerpt");
+  ex.textContent = r.excerpt || "";
+  ex.classList.toggle("hidden", !r.excerpt);
+}
+
+function fillQuerySelects(columns) {
+  const group = $("#data-group");
+  const metric = $("#data-metric");
+  const prevG = group.value;
+  const prevM = metric.value;
+  group.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "(none)";
+  group.appendChild(none);
+  metric.replaceChildren();
+  let firstNumber = "";
+  columns.forEach(c => {
+    const name = c.name;
+    const og = document.createElement("option");
+    og.value = name;
+    og.textContent = name;
+    group.appendChild(og);
+    const om = document.createElement("option");
+    om.value = name;
+    om.textContent = c.kind ? `${name} (${c.kind})` : name;
+    metric.appendChild(om);
+    if (!firstNumber && c.kind === "number") firstNumber = name;
+  });
+  if ([...group.options].some(o => o.value === prevG)) group.value = prevG;
+  if (prevM && [...metric.options].some(o => o.value === prevM)) metric.value = prevM;
+  else if (firstNumber) metric.value = firstNumber;
+}
+
+function renderBars(host, chart) {
+  host.replaceChildren();
+  if (!chart || !chart.labels || !chart.labels.length) {
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  const title = document.createElement("div");
+  title.className = "data-chart-title";
+  title.textContent = chart.title || "";
+  host.appendChild(title);
+  const max = Math.max(...chart.values.map(v => Math.abs(Number(v) || 0)), 1);
+  chart.labels.forEach((label, i) => {
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    const name = document.createElement("span");
+    name.className = "bar-name";
+    name.textContent = label;
+    const track = document.createElement("div");
+    track.className = "bar-track";
+    const bar = document.createElement("div");
+    bar.className = "bar-fill";
+    bar.style.width = ((Math.abs(Number(chart.values[i]) || 0) / max) * 100) + "%";
+    track.appendChild(bar);
+    const val = document.createElement("span");
+    val.className = "bar-val";
+    val.textContent = String(chart.values[i]);
+    row.append(name, track, val);
+    host.appendChild(row);
+  });
+}
+
+function renderGrid(host, columns, rows) {
+  host.replaceChildren();
+  if (!columns || !columns.length) return;
+  const table = document.createElement("table");
+  table.className = "data-grid";
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  columns.forEach(c => {
+    const th = document.createElement("th");
+    th.textContent = String(c);
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  const tb = document.createElement("tbody");
+  (rows || []).forEach(row => {
+    const tr = document.createElement("tr");
+    columns.forEach(c => {
+      const td = document.createElement("td");
+      const v = row[c];
+      td.textContent = v == null ? "" : String(v);
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  table.append(thead, tb);
+  host.appendChild(table);
+}
+
+async function runSummary() {
+  const t = S.active;
+  if (!t || t.kind !== "data") return;
+  const body = {
+    op: "query", path: t.path, sheet: $("#data-sheet").value || "",
+    group_by: $("#data-group").value ? [$("#data-group").value] : [],
+    metrics: [{ column: $("#data-metric").value || "", fn: $("#data-fn").value || "sum" }],
+    limit: 50,
+  };
+  try {
+    const r = await api(`/api/ws/${S.ws.id}/analyze`, { method: "POST", body });
+    $("#data-meta").textContent = `${r.row_count} matching row${r.row_count === 1 ? "" : "s"}`;
+    renderBars($("#data-chart"), r.chart);
+    renderGrid($("#data-table"), r.columns || [], r.rows || []);
+  } catch (e) { fail(e); }
+}
+
+async function runSql() {
+  const t = S.active;
+  if (!t || t.kind !== "data") return;
+  try {
+    const r = await api(`/api/ws/${S.ws.id}/analyze`, {
+      method: "POST",
+      body: { op: "sql", path: t.path, sql: $("#data-sql-text").value },
+    });
+    $("#data-meta").textContent = r.note || "";
+    renderBars($("#data-chart"), r.chart);
+    renderGrid($("#data-table"), r.columns || [], r.rows || []);
+  } catch (e) { fail(e); }
+}
+
 function getSelection() {
-  if (!S.active || S.active.kind === "image") return "";
+  if (!S.active || S.active.kind === "image" || S.active.kind === "data") return "";
   if (Ed.monaco) {
     const sel = Ed.ed.getSelection();
     return sel && !sel.isEmpty() ? S.active.model.getValueInRange(sel) : "";
@@ -254,7 +454,13 @@ function activate(t, line) {
     renderTabs();
     return;
   }
-  showImage(null);
+  if (t.kind === "data") {
+    if (Ed.monaco) Ed.ed.setModel(null);
+    showData(t);
+    renderTabs();
+    return;
+  }
+  showSurface("editor");
   if (Ed.monaco) {
     Ed.ed.setModel(t.model);
     if (line) { Ed.ed.revealLineInCenter(line); Ed.ed.setPosition({ lineNumber: line, column: 1 }); }
@@ -266,10 +472,17 @@ function activate(t, line) {
   renderTabs();
 }
 
-async function openFile(path, line) {
+async function openFile(path, line, asData) {
   let t = S.tabs.find(x => x.path === path);
+  const wantData = asData === true || (asData !== false && opensAsData(path));
+  if (t && ((wantData && t.kind !== "data") || (!wantData && t.kind === "data"))) {
+    closeTab(t, true);
+    t = null;
+  }
   if (!t) {
-    if (isImagePath(path)) {
+    if (wantData) {
+      t = { path, kind: "data", dirty: false, rev: 0 };
+    } else if (isImagePath(path)) {
       t = { path, kind: "image", dirty: false, rev: Date.now() };
     } else {
       let r;
@@ -300,7 +513,7 @@ function closeTab(t, force) {
     if (S.active) activate(S.active);
     else {
       if (Ed.monaco) Ed.ed.setModel(null); else if (Ed.ta) Ed.ta.value = "";
-      showImage(null);
+      showSurface("editor");
     }
   }
   renderTabs();
@@ -311,7 +524,7 @@ function closeAllTabs() {
 }
 
 async function saveTab(t) {
-  if (!t || t.kind === "image") return;
+  if (!t || t.kind === "image" || t.kind === "data") return;
   const value = tabValue(t);
   const r = await api(`/api/ws/${S.ws.id}/file`, { method: "PUT", body: { path: t.path, content: value } });
   t.saved = value;
@@ -320,7 +533,7 @@ async function saveTab(t) {
   return r;
 }
 async function saveActive() {
-  if (!S.active || S.active.kind === "image") return;
+  if (!S.active || S.active.kind === "image" || S.active.kind === "data") return;
   try {
     const r = await saveTab(S.active);
     setStatus("Saved to disk: " + (r.abs || S.active.path));
@@ -346,6 +559,10 @@ async function onFilesChanged(paths) {
     if (t.kind === "image") {
       t.rev = Date.now();
       if (S.active === t) showImage(t);
+      continue;
+    }
+    if (t.kind === "data") {
+      if (S.active === t) showData(t);
       continue;
     }
     let r;
@@ -433,9 +650,18 @@ function showMenu(ev, entry) {
     items.push(["New file", () => createEntry(dir, "file")]);
     items.push(["New folder", () => createEntry(dir, "dir")]);
     if (entry) {
+      if (entry.type === "file") items.push(["Open with…", () => openWith(entry.path)]);
       if (entry.type === "file" && /\.(html?|htm)$/i.test(entry.name)) {
         items.push(["Open preview (writes to disk)", () => openPreview(entry.path)]);
         items.push(["Edit source", () => openFile(entry.path)]);
+      }
+      if (entry.type === "file" && IMAGE_EXT.test(entry.name)) {
+        items.push(["Analyze", async () => { await openFile(entry.path); analyzeOpenImage(); }]);
+      } else if (entry.type === "file" && (DATA_EXT.test(entry.name) || TABLE_EXT.test(entry.name))) {
+        items.push(["Analyze", () => openFile(entry.path, null, true)]);
+      }
+      if (entry.type === "file" && TABLE_EXT.test(entry.name)) {
+        items.push(["Edit as text", () => openFile(entry.path, null, false)]);
       }
       items.push(["Rename", () => renameEntry(entry)]);
       items.push(["Delete", () => deleteEntry(entry)]);
@@ -458,6 +684,12 @@ function showMenu(ev, entry) {
   m.classList.remove("hidden");
 }
 function hideMenu() { $("#ctxmenu").classList.add("hidden"); }
+async function openWith(path) {
+  if (!S.ws) return;
+  try {
+    await api(`/api/ws/${S.ws.id}/open-with`, { method: "POST", body: { path } });
+  } catch (e) { fail(e); }
+}
 document.addEventListener("click", hideMenu);
 $("#tree").addEventListener("contextmenu", e => { e.preventDefault(); showMenu(e, null); });
 
@@ -699,6 +931,7 @@ function createXterm() {
 
 function ptyFit() {
   if (!T.xterm || $("#terminal").classList.contains("hidden") || $("#term-xterm").classList.contains("hidden")) return;
+  if ($("#center").classList.contains("hidden")) return;
   try { T.fit.fit(); } catch (e) { return; }
   clearTimeout(T.resizeTimer);
   T.resizeTimer = setTimeout(() => {
@@ -874,7 +1107,7 @@ function promptActions(text, attachments) {
 
 const msgBox = () => $("#messages");
 function scrollMsgs() { const m = msgBox(); m.scrollTop = m.scrollHeight; }
-const ATTACH_KIND = { image: "IMG", pdf: "PDF", excel: "XLS", word: "DOC" };
+const ATTACH_KIND = { image: "IMG", pdf: "PDF", excel: "XLS", csv: "CSV", word: "DOC" };
 function msgFiles(list) {
   if (!list || !list.length) return null;
   const row = document.createElement("div");
@@ -935,6 +1168,7 @@ function addBubble(role, text, attachments) {
 }
 function toolSummary(name, args) {
   if (!args) return "";
+  if (args.prompt) return args.prompt;
   if (args.path) return args.path;
   if (args.command) return args.command;
   if (args.query) return args.query;
@@ -957,6 +1191,7 @@ function fillToolCard(id, ok, text) {
   $("pre", d).textContent = text || "";
 }
 // ---- human-in-the-loop: every agent action that changes something waits here for a click
+let autoApprove = false; // rest of the current request, after Always approve
 function approvalPreview(name, a) {
   a = a || {};
   const clip = (s, n) => (s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
@@ -968,6 +1203,8 @@ function approvalPreview(name, a) {
       return `${a.path}${a.replace_all ? "  (all occurrences)" : ""}\n\n` +
         clip(lines(a.old_string || "", "- "), 3000) + "\n" + clip(lines(a.new_string || "", "+ "), 3000);
     case "delete_file": return `Delete ${a.path}`;
+    case "generate_image":
+      return `${a.path || "a new file under images/"}${a.aspect_ratio ? "  ·  " + a.aspect_ratio : ""}\n\n${a.prompt || ""}`;
     case "run_command": return `${a.cwd ? `[${a.cwd}] ` : ""}$ ${a.command}`;
     case "cli_agent": return `${a.command}\n\nIt will receive this prompt and may change files by itself:\n\n` + clip(String(a.prompt || ""), 2000);
     default: return clip(JSON.stringify(a, null, 2), 4000);
@@ -975,6 +1212,7 @@ function approvalPreview(name, a) {
 }
 const approvalTitle = {
   write_file: "Write file", edit_file: "Edit file", delete_file: "Delete",
+  generate_image: "Generate image",
   run_command: "Run command", cli_agent: "Run command-line agent",
 };
 function addApproval(ev) {
@@ -984,28 +1222,38 @@ function addApproval(ev) {
   d.innerHTML = `<div class="ap-title">✋ <b>${esc(approvalTitle[ev.name] || ev.name)}</b> — waiting for your approval</div>
     <pre class="ap-body"></pre>
     <input class="ap-reason" placeholder="Optional: reason, or what to do instead (sent to the agent if you deny)">
-    <div class="row"><button class="primary ap-yes">Approve</button><button class="ap-no">Deny</button><span class="ap-msg"></span></div>`;
+    <div class="row"><button class="primary ap-yes">Approve</button><button class="ap-always" title="Approve this action and every later action in this request">Always approve</button><button class="ap-no">Deny</button><span class="ap-msg"></span></div>`;
   $(".ap-body", d).textContent = approvalPreview(ev.name, ev.arguments);
   const answer = async decision => {
     $$("button, input", d).forEach(x => (x.disabled = true));
     try {
       await api(`/api/approvals/${ev.id}`, { method: "POST", body: { decision, reason: $(".ap-reason", d).value.trim() } });
     } catch (e) {
-      $(".ap-msg", d).textContent = e.message;
+      const msg = $(".ap-msg", d);
+      if (msg) msg.textContent = e.message;
       $$("button, input", d).forEach(x => (x.disabled = false));
     }
   };
   $(".ap-yes", d).onclick = () => answer("allow");
-  $(".ap-no", d).onclick = () => answer("deny");
+  $(".ap-always", d).onclick = () => {
+    autoApprove = true;
+    $("#chat-status").textContent = "Approving the rest of this request…";
+    document.title = baseTitle;
+    answer("allow");
+  };
+  $(".ap-no", d).onclick = () => { autoApprove = false; answer("deny"); };
   msgBox().appendChild(d);
   scrollMsgs();
-  $(".ap-yes", d).focus();
+  if (autoApprove) answer("allow");
+  else $(".ap-yes", d).focus();
 }
 function resolveApproval(ev) {
   const d = $(`.approval[data-id="${CSS.escape(ev.id)}"]`, msgBox());
   if (!d) return;
-  const reason = $(".ap-reason", d).value.trim();
-  const label = { allow: "✓ Approved", deny: "✗ Denied" + (reason ? ": " + reason : ""),
+  const reasonEl = $(".ap-reason", d);
+  const reason = reasonEl ? reasonEl.value.trim() : "";
+  const label = { allow: autoApprove ? "✓ Always approved" : "✓ Approved",
+                  deny: "✗ Denied" + (reason ? ": " + reason : ""),
                   cancelled: "Stopped", timeout: "Timed out — not run" }[ev.decision] || ev.decision;
   d.className = "approval done " + ev.decision;
   d.innerHTML = `<span>${esc(label)}</span>`;
@@ -1044,7 +1292,7 @@ function renderSessionMessages(msgs) {
   const box = msgBox();
   box.innerHTML = "";
   if (!msgs.length) {
-    box.innerHTML = '<div class="hint" style="padding:8px">Describe what you want, or attach an image, PDF, Excel or Word file. The selected agent can read, create, edit files and run commands in this workspace; you approve every change before it happens.</div>';
+    box.innerHTML = '<div class="hint" style="padding:8px">Describe what you want, or attach an image, PDF, Excel or Word file. The selected agent can read, create, and edit files, generate an image, and run commands in this workspace; you approve every change before it happens.</div>';
     return;
   }
   promptHistory.length = 0;
@@ -1162,20 +1410,21 @@ function attachCombo(input, getOpts) {
 // ---- model picker in the chat panel (OpenAI-compatible / Anthropic agents); the choice is saved on the agent
 const currentAgent = () => S.agents.find(a => String(a.id) === $("#agent-select").value) || null;
 const usesModel = a => !!a && (a.provider === "openai" || a.provider === "anthropic");
-let chatModels = [], chatModelsFor = null;
+let chatModels = [], imageModels = [], chatModelsFor = null;
 
 async function loadChatModels(force) {
   const a = currentAgent();
   if (!usesModel(a)) return false;
   if (!force && chatModelsFor === a.id && chatModels.length) return true;
-  const btn = $("#model-load");
-  btn.disabled = true;
+  const buttons = [$("#model-load"), $("#image-model-load")].filter(Boolean);
+  buttons.forEach(b => (b.disabled = true));
   try {
     const r = await api("/api/models", { method: "POST", body: { agent_id: a.id } });
+    imageModels = r.models.map(m => m.id);
     chatModels = r.models.filter(m => m.tools !== false).map(m => m.id);
     chatModelsFor = a.id;
     return true;
-  } catch (e) { fail(e); return false; } finally { btn.disabled = false; }
+  } catch (e) { fail(e); return false; } finally { buttons.forEach(b => (b.disabled = false)); }
 }
 
 function syncModelRow() {
@@ -1189,7 +1438,39 @@ function syncModelRow() {
     saveAgentModel(a, legacy, true);
   }
   $("#model-input").value = a.model || "";
-  if (chatModelsFor !== a.id) { chatModels = []; chatModelsFor = null; }
+  if (chatModelsFor !== a.id) { chatModels = []; imageModels = []; chatModelsFor = null; }
+  syncImageRow();
+}
+function shownImageModel(a) {
+  return ((a && a.image_model) || "").trim() || (a && a.model) || "";
+}
+function syncImageRow() {
+  const a = currentAgent();
+  const openai = !!a && a.provider === "openai";
+  $("#image-model-row").classList.toggle("hidden", !openai);
+  if (!openai) return;
+  $("#image-model-input").value = shownImageModel(a);
+  $("#image-model-input").placeholder = a.model || "same as chat model";
+}
+async function saveImageModel(a, model) {
+  const chat = (a.model || "").trim();
+  const stored = model === chat ? "" : model;
+  if (stored === (a.image_model || "")) {
+    $("#image-model-input").value = shownImageModel(a);
+    return;
+  }
+  const before = a.image_model || "";
+  a.image_model = stored;
+  try {
+    const saved = await api(`/api/agents/${a.id}/image-model`, { method: "POST", body: { image_model: stored } });
+    a.image_model = saved.image_model || "";
+    $("#image-model-input").value = shownImageModel(a);
+    toast(a.image_model ? `Image model: ${a.image_model}` : "Image model follows the chat model");
+  } catch (e) {
+    a.image_model = before;
+    $("#image-model-input").value = shownImageModel(a);
+    fail(e);
+  }
 }
 async function saveAgentModel(a, model, quiet) {
   if (!model || model === a.model) return;
@@ -1197,6 +1478,7 @@ async function saveAgentModel(a, model, quiet) {
   a.model = model;
   try {
     await api(`/api/agents/${a.id}/model`, { method: "POST", body: { model } });
+    if (!(a.image_model || "").trim()) syncImageRow();
     if (!quiet) toast(`Saved: ${a.name} · ${model}`);
   } catch (e) {
     if (a.model === model) a.model = before;
@@ -1232,6 +1514,25 @@ $("#model-load").onclick = async () => {
     chatCombo.show();
   }
 };
+const imageCombo = attachCombo($("#image-model-input"), () => imageModels.length ? imageModels : chatModels);
+$("#image-model-input").addEventListener("focus", async () => {
+  if (chatModelsFor === (currentAgent() || {}).id && (imageModels.length || chatModels.length)) return;
+  if (await loadChatModels() && document.activeElement === $("#image-model-input")) imageCombo.show();
+});
+$("#image-model-input").addEventListener("change", e => {
+  const a = currentAgent();
+  if (!a) return;
+  const model = e.target.value.trim();
+  if (model) saveImageModel(a, model); else { e.target.value = shownImageModel(a); }
+});
+$("#image-model-load").onclick = async () => {
+  if (await loadChatModels(true)) {
+    const n = imageModels.length || chatModels.length;
+    toast(`${n} models available`);
+    $("#image-model-input").focus();
+    imageCombo.show();
+  }
+};
 
 function setBusy(b) {
   $("#send").classList.toggle("hidden", b);
@@ -1244,7 +1545,7 @@ function setBusy(b) {
 // ---- files dropped, pasted or picked for the next message
 const ATTACH_EXT = {
   png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image",
-  pdf: "pdf", xlsx: "excel", xlsm: "excel", xls: "excel", docx: "word", doc: "word",
+  pdf: "pdf", xlsx: "excel", xlsm: "excel", xls: "excel", csv: "csv", tsv: "csv", docx: "word", doc: "word",
 };
 const ATTACH_MAX_FILES = 4, ATTACH_MAX_FILE = 8 * 1024 * 1024, ATTACH_MAX_TOTAL = 20 * 1024 * 1024;
 let attachments = [];
@@ -1305,7 +1606,7 @@ async function addFiles(fileList) {
       name = `pasted-${Date.now()}.${sub}`;
     }
     const kind = attachKind(name);
-    if (!kind) { toast(`${name} is not an image, PDF, Excel or Word file`, true); continue; }
+    if (!kind) { toast(`${name} is not an image, PDF, Excel, CSV, or Word file`, true); continue; }
     if (file.size > ATTACH_MAX_FILE) { toast(`${name} is larger than 8 MB`, true); continue; }
     const total = attachments.reduce((n, a) => n + a.size, 0);
     if (total + file.size > ATTACH_MAX_TOTAL) { toast("Attachments are larger than 20 MB in total", true); break; }
@@ -1359,9 +1660,11 @@ async function sendChat() {
   if (!S.agents.length) { toast("Add an agent first", true); return openAgentSettings(); }
   if (!S.session) await loadSessions();
   try { await saveAll(); } catch (e) { return fail(e); }
+  autoApprove = false;
   const body = { message: text, agent_id: +$("#agent-select").value || null, thinking: $("#think-level").value };
   if (files.length) body.attachments = files.map(a => ({ name: a.name, mime: a.mime, data: a.data }));
   if (usesModel(currentAgent()) && $("#model-input").value.trim()) body.model = $("#model-input").value.trim();
+  if (S.analytics) body.analytics = true;
   if ($("#ctx-file").checked && S.active) body.active_file = { path: S.active.path, selection: getSelection() };
 
   if ($(".hint", msgBox())) msgBox().innerHTML = "";
@@ -1391,8 +1694,12 @@ async function sendChat() {
         case "tool_call": addToolCard(ev.id, ev.name, ev.arguments); $("#chat-status").textContent = `Running ${ev.name}…`; break;
         case "approval":
           addApproval(ev);
-          $("#chat-status").textContent = "Waiting for your approval…";
-          document.title = "✋ Approval needed – PSEditor";
+          if (autoApprove) {
+            $("#chat-status").textContent = "Approving the rest of this request…";
+          } else {
+            $("#chat-status").textContent = "Waiting for your approval…";
+            document.title = "✋ Approval needed – PSEditor";
+          }
           break;
         case "approval_result":
           resolveApproval(ev);
@@ -1401,6 +1708,10 @@ async function sendChat() {
           break;
         case "tool_result":
           fillToolCard(ev.id, ev.ok, ev.result);
+          if (ev.name === "generate_image" && ev.ok) {
+            const img = (ev.changed || []).filter(p => /\.(png|jpe?g|gif|webp|svg)$/i.test(p)).pop();
+            if (img) openFile(img).catch(() => {});
+          }
           if (ev.changed && ev.changed.length > changedSeen) { changedSeen = ev.changed.length; onFilesChanged(ev.changed); }
           $("#chat-status").textContent = "Agent is working…";
           break;
@@ -1432,6 +1743,7 @@ async function sendChat() {
     if (e.name === "AbortError") addBubble("error", "Stopped.");
     else addBubble("error", e.message);
   } finally {
+    autoApprove = false;
     S.abort = null;
     document.title = baseTitle;
     $$(".approval:not(.done)", msgBox()).forEach(d => d.remove());   // nobody is waiting for these any more
@@ -1464,6 +1776,26 @@ thinkShow.onchange = () => {
   applyThinkView();
 };
 applyThinkView();
+const promptCode = $("#prompt").placeholder;
+function applyAnalyticsMode() {
+  $("#btn-analytics").classList.toggle("on", S.analytics);
+  $("#prompt").placeholder = S.analytics
+    ? "Ask about a spreadsheet, database, invoice, receipt, or financial statement… Figures come from the file."
+    : promptCode;
+  if (!$("#chat-status").textContent) setStatus(S.analytics ? "Analytics mode" : "Ready");
+}
+$("#btn-analytics").onclick = () => {
+  S.analytics = !S.analytics;
+  localStorage.setItem("pseditor.analytics", S.analytics ? "1" : "0");
+  applyAnalyticsMode();
+  setStatus(S.analytics ? "Analytics mode" : "Ready");
+};
+applyAnalyticsMode();
+$("#data-sheet").onchange = () => {
+  if (S.active && S.active.kind === "data") showData(S.active, $("#data-sheet").value);
+};
+$("#data-run").onclick = () => runSummary();
+$("#data-sql-run").onclick = () => runSql();
 $("#send").onclick = sendChat;
 $("#stop").onclick = () => { if (S.abort) { releasePending(); S.abort.abort(); } };
 window.addEventListener("pagehide", () => { if (S.abort) releasePending(); });
@@ -1665,6 +1997,8 @@ function openAgentSettings(selectedId) {
       <label data-for="key">API key</label><input id="f-key" data-for="key" type="password" autocomplete="new-password" placeholder="${a.has_key ? "(saved – leave blank to keep)" : ""}">
       <label data-for="model">Model</label><div class="row-flex" data-for="model"><input id="f-model" autocomplete="off" value="${esc(a.model || "")}" placeholder="e.g. openai/gpt-4.1"><button id="f-load" type="button">Load models</button></div>
       <div class="help" data-for="model" id="f-modelhelp">Click “Load models” to list what this provider offers (uses the URL and key above).</div>
+      <label data-for="image">Image model</label><input id="f-image" data-for="image" value="${esc(a.image_model || "")}" placeholder="${esc(a.model || "same as the chat model")}">
+      <div class="help" data-for="image">Separate from the chat model. Leave blank to generate pictures with the chat model above.</div>
       <label data-for="cmd">Command</label><input id="f-cmd" data-for="cmd" value="${esc(a.command || "")}">
       <div class="help" data-for="cmd">Runs in the workspace folder. The prompt is piped to stdin, or inserted where <code>{prompt}</code> appears. File changes made by the CLI are detected and can be reverted.</div>
       <label data-for="temp">Temperature</label><input id="f-temp" data-for="temp" value="${a.temperature ?? ""}" placeholder="default">
@@ -1680,6 +2014,7 @@ function openAgentSettings(selectedId) {
       const p = $("#f-provider", body).value;
       const show = {
         url: p !== "cli", key: p !== "cli", model: p === "openai" || p === "anthropic",
+        image: p === "openai",
         cmd: p === "cli", temp: p === "openai" || p === "anthropic", hdr: p !== "cli",
       };
       $$("[data-for]", body).forEach(el => el.classList.toggle("hidden", !show[el.dataset.for]));
@@ -1689,7 +2024,8 @@ function openAgentSettings(selectedId) {
     apply();
     const collect = () => ({
       name: $("#f-name", body).value, provider: $("#f-provider", body).value, base_url: $("#f-url", body).value,
-      api_key: $("#f-key", body).value, model: $("#f-model", body).value, command: $("#f-cmd", body).value,
+      api_key: $("#f-key", body).value, model: $("#f-model", body).value,
+      image_model: $("#f-image", body).value, command: $("#f-cmd", body).value,
       temperature: $("#f-temp", body).value, extra_headers: $("#f-hdr", body).value,
       system_prompt: $("#f-sys", body).value, is_default: $("#f-def", body).checked,
     });
@@ -1837,6 +2173,23 @@ $("#image-ocr-btn").onclick = async () => {
     btn.disabled = false;
   }
 };
+async function analyzeOpenImage() {
+  if (!S.ws || !S.active || S.active.kind !== "image") return;
+  const box = $("#image-ocr");
+  box.classList.remove("hidden");
+  box.textContent = "Analyzing…";
+  try {
+    const r = await api(`/api/ws/${S.ws.id}/analyze`, { method: "POST", body: { op: "extract", path: S.active.path } });
+    const lines = (r.fields || []).map(f => `${f.label}: ${f.value}`);
+    box.textContent = lines.length
+      ? lines.join("\n")
+      : "No invoice, receipt, or financial-statement fields were found.";
+    if (r.excerpt) box.textContent += "\n\n" + r.excerpt;
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+$("#image-analyze-btn").onclick = () => analyzeOpenImage();
 
 // ---------------------------------------------------------------- layout / shortcuts
 function makeResizer(id, apply) {
@@ -1859,23 +2212,71 @@ makeResizer("#rz-term", e => {
 });
 $("#rz-term").classList.add("hidden");
 
+// View menu: show or hide the code editor and the chat. At least one stays open.
+function viewOn(part) {
+  return localStorage.getItem("pseditor.view." + part) !== "0";
+}
+function applyView() {
+  let editor = viewOn("editor");
+  let chat = viewOn("chat");
+  if (!editor && !chat) { editor = true; chat = true; }
+  document.body.classList.toggle("view-no-editor", !editor);
+  $("#center").classList.toggle("hidden", !editor);
+  $("#chat").classList.toggle("hidden", !chat);
+  $("#rz-right").classList.toggle("hidden", !editor || !chat);
+  $("#view-editor").checked = editor;
+  $("#view-chat").checked = chat;
+  if (editor && Ed.monaco && Ed.ed) requestAnimationFrame(() => Ed.ed.layout());
+}
+function setView(part, on) {
+  const editor = part === "editor" ? on : !$("#center").classList.contains("hidden");
+  const chat = part === "chat" ? on : !$("#chat").classList.contains("hidden");
+  if (!editor && !chat) {
+    toast("Keep the editor or the chat visible.");
+    applyView();
+    return;
+  }
+  localStorage.setItem("pseditor.view." + part, on ? "1" : "0");
+  applyView();
+  if (part === "chat" && on) $("#prompt").focus();
+}
+function showChat() {
+  if ($("#chat").classList.contains("hidden")) setView("chat", true);
+  else $("#prompt").focus();
+}
+function setViewMenu(open) {
+  $("#view-drop").classList.toggle("hidden", !open);
+  $("#btn-view").setAttribute("aria-expanded", open ? "true" : "false");
+}
+$("#btn-view").onclick = e => {
+  e.stopPropagation();
+  setViewMenu($("#view-drop").classList.contains("hidden"));
+};
+$("#view-drop").onclick = e => e.stopPropagation();
+$("#view-editor").onchange = () => setView("editor", $("#view-editor").checked);
+$("#view-chat").onchange = () => setView("chat", $("#view-chat").checked);
+document.addEventListener("click", () => setViewMenu(false));
+applyView();
+
 $("#btn-quick").onclick = quickOpen;
 $("#btn-term").onclick = () => toggleTerminal();
-$("#btn-chat").onclick = () => $("#prompt").focus();
+$("#btn-chat").onclick = () => showChat();
 
 window.addEventListener("keydown", e => {
   // Inside the real terminal Ctrl+P / Ctrl+L / Ctrl+S ... belong to the shell; only Ctrl+` is ours.
   if (e.key !== "`" && e.target && e.target.closest && e.target.closest("#term-xterm")) return;
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) {
-    if (e.key === "Escape" && modalOpen()) closeModal();
-    else if (e.key === "F1") { e.preventDefault(); openHelp(); }
+    if (e.key === "Escape") {
+      if (!$("#view-drop").classList.contains("hidden")) { setViewMenu(false); return; }
+      if (modalOpen()) closeModal();
+    } else if (e.key === "F1") { e.preventDefault(); openHelp(); }
     return;
   }
   const k = e.key.toLowerCase();
   if (k === "s") { e.preventDefault(); saveActive(); }
   else if (k === "p") { e.preventDefault(); quickOpen(); }
-  else if (k === "l") { e.preventDefault(); $("#prompt").focus(); }
+  else if (k === "l") { e.preventDefault(); showChat(); }
   else if (e.key === "`") { e.preventDefault(); toggleTerminal(); }
   else if (k === "o" && e.shiftKey) { e.preventDefault(); folderPicker(); }
   else if (k === "f" && e.shiftKey) { e.preventDefault(); $$(".side-tab")[1].click(); }
@@ -1886,6 +2287,7 @@ window.addEventListener("keydown", e => {
   renderTabs();
   renderTree();
   await setupEditor();
+  applyView();
   try {
     const boot = await api("/api/bootstrap");
     S.agents = boot.agents; S.workspaces = boot.workspaces;

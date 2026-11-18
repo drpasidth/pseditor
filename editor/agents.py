@@ -13,13 +13,13 @@ from django.conf import settings
 from . import approvals, ocr
 from .fsops import FsError, run_process
 from .models import Agent, ChatMessage
-from .tools import TOOL_SPECS, ToolContext
+from .tools import TOOL_SPECS, ToolContext, tool_specs
 
 HTTP_TIMEOUT = 300
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 DEFAULT_SYSTEM_PROMPT = """You are the coding agent inside PSEditor, a code editor similar to Cursor.
-You work on the user's workspace through tools: workspace_info, list_files, read_file, search, write_file, edit_file, delete_file and run_command.
+You work on the user's workspace through tools: workspace_info, list_files, read_file, search, write_file, edit_file, delete_file, generate_image and run_command.
 The workspace is the set of folders the user has added to it; you can read, create, update and delete files inside those folders only.
 The user can add more folders at any time, so call workspace_info if you are unsure which folders are available.
 
@@ -30,7 +30,23 @@ Guidelines:
 - After changing code, verify it when practical (run tests or the program with run_command).
 - Every write_file, edit_file, delete_file and run_command is shown to the user, who must approve it before it runs. If an action is denied, do not retry it unchanged: take the user's reason into account, try a different approach, or ask what they want.
 - Keep final answers short: say what you changed and anything the user must do next.
+- When the user asks you to create, draw, or generate a picture, call generate_image with a detailed prompt. It saves an image file in the workspace. Do not say an image was created unless that tool succeeded.
 - The user may attach images, PDFs, Excel workbooks and Word documents. Text extracted from documents is in the user message inside <attachments>. Text read from images is inside <image-text>. read_file on a png, jpg, gif, webp or bmp also returns that text.
+Operating system of the host: {os}.{multi}"""
+
+ANALYTICS_SYSTEM_PROMPT = """You are the analytics agent inside PSEditor. Analytics mode is on.
+You answer questions about the user's data: Excel workbooks, CSV files, SQLite databases, invoices, receipts, and financial statements.
+Tools: list_datasets, profile_data, query_data, sql_query, extract_document, plus the usual file tools.
+
+Rules:
+- Do not invent a number, date, name, or total. Every figure you state must appear in a tool result or in an attached profile from this turn.
+- For a CSV, Excel, or SQLite file, call profile_data before you answer, then query_data or sql_query for the total you need. sql_query is one read-only SELECT and only works on SQLite files.
+- For a PDF, Word file, or image of an invoice, receipt, or financial statement, call extract_document. Quote the field value and its source line. If a field is absent, say it was not found.
+- Images are read with the OCR endpoint. If that is not configured or it fails, say so instead of guessing the text.
+- You may use write_file when the user asks to save a report. Do not change source data unless they ask.
+- When the user asks for a picture, call generate_image. It saves an image file. Do not invent an image.
+- Every write_file, edit_file, delete_file and run_command waits for the user's approval. Reads and analysis tools do not.
+- Keep the answer short: the result, the figures, and the file they came from.
 Operating system of the host: {os}.{multi}"""
 
 MULTI_ROOT_NOTE = """
@@ -80,9 +96,10 @@ def _denied_text(note):
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-def build_system_prompt(agent, fs=None):
+def build_system_prompt(agent, fs=None, analytics=False):
     multi = MULTI_ROOT_NOTE if fs is not None and getattr(fs, "multi", False) else ""
-    base = DEFAULT_SYSTEM_PROMPT.format(
+    template = ANALYTICS_SYSTEM_PROMPT if analytics else DEFAULT_SYSTEM_PROMPT
+    base = template.format(
         os="Windows" if sys.platform == "win32" else sys.platform,
         multi=multi,
     )
@@ -276,12 +293,12 @@ def _to_openai(system, messages, allow_images=True):
     return out
 
 
-def call_openai(agent, system, messages, use_tools=True, thinking="off"):
+def call_openai(agent, system, messages, use_tools=True, thinking="off", tools=None):
     messages = _with_image_text(messages)
     model_key = (agent.model or "").strip()
     allow_images = model_key not in _MODELS_WITHOUT_VISION
     try:
-        return _complete_openai(agent, system, messages, use_tools, thinking, allow_images)
+        return _complete_openai(agent, system, messages, use_tools, thinking, allow_images, tools)
     except AgentError as exc:
         if not allow_images or not _image_rejected(exc) or not _history_has_images(messages):
             raise
@@ -291,10 +308,10 @@ def call_openai(agent, system, messages, use_tools=True, thinking="off"):
                 "This model cannot read images. Set the OCR endpoint with the gear icon, then send the image again. "
                 + str(exc)
             )
-        return _complete_openai(agent, system, messages, use_tools, thinking, False)
+        return _complete_openai(agent, system, messages, use_tools, thinking, False, tools)
 
 
-def _complete_openai(agent, system, messages, use_tools, thinking, allow_images):
+def _complete_openai(agent, system, messages, use_tools, thinking, allow_images, tools=None):
     headers = {"Content-Type": "application/json", **agent.headers()}
     if agent.api_key:
         headers["Authorization"] = f"Bearer {agent.api_key}"
@@ -307,8 +324,9 @@ def _complete_openai(agent, system, messages, use_tools, thinking, allow_images)
         payload["reasoning"] = {"effort": level}
     elif level != "off" and "api.openai.com" in base:
         payload["reasoning_effort"] = level
-    if use_tools:
-        payload["tools"] = [{"type": "function", "function": t} for t in TOOL_SPECS]
+    specs = TOOL_SPECS if tools is None else tools
+    if use_tools and specs:
+        payload["tools"] = [{"type": "function", "function": t} for t in specs]
         payload["tool_choice"] = "auto"
     data = _post(_openai_url(agent), headers, payload).json()
     try:
@@ -387,12 +405,12 @@ def _to_anthropic(messages, allow_images=True):
     return out
 
 
-def call_anthropic(agent, system, messages, use_tools=True, thinking="off"):
+def call_anthropic(agent, system, messages, use_tools=True, thinking="off", tools=None):
     messages = _with_image_text(messages)
     model_key = (agent.model or "").strip()
     allow_images = model_key not in _MODELS_WITHOUT_VISION
     try:
-        return _complete_anthropic(agent, system, messages, use_tools, thinking, allow_images)
+        return _complete_anthropic(agent, system, messages, use_tools, thinking, allow_images, tools)
     except AgentError as exc:
         if not allow_images or not _image_rejected(exc) or not _history_has_images(messages):
             raise
@@ -402,10 +420,10 @@ def call_anthropic(agent, system, messages, use_tools=True, thinking="off"):
                 "This model cannot read images. Set the OCR endpoint with the gear icon, then send the image again. "
                 + str(exc)
             )
-        return _complete_anthropic(agent, system, messages, use_tools, thinking, False)
+        return _complete_anthropic(agent, system, messages, use_tools, thinking, False, tools)
 
 
-def _complete_anthropic(agent, system, messages, use_tools, thinking, allow_images):
+def _complete_anthropic(agent, system, messages, use_tools, thinking, allow_images, tools=None):
     headers = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -427,10 +445,11 @@ def _complete_anthropic(agent, system, messages, use_tools, thinking, allow_imag
         payload.pop("temperature", None)
     elif agent.temperature is not None:
         payload["temperature"] = agent.temperature
-    if use_tools:
+    specs = TOOL_SPECS if tools is None else tools
+    if use_tools and specs:
         payload["tools"] = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
-            for t in TOOL_SPECS
+            for t in specs
         ]
     data = _post(_anthropic_url(agent), headers, payload).json()
     text, calls, think_text, thinking_blocks = [], [], [], []
@@ -457,7 +476,7 @@ def _complete_anthropic(agent, system, messages, use_tools, thinking, allow_imag
 # ---------------------------------------------------------------------------
 # Webhook & CLI agents
 # ---------------------------------------------------------------------------
-def call_webhook(agent, fs, instruction, history, active):
+def call_webhook(agent, fs, instruction, history, active, analytics=False):
     """POST the task to a custom HTTP agent.
 
     Request JSON: instruction, messages[{role,content}], system_prompt, model, workspace{name,path},
@@ -483,7 +502,8 @@ def call_webhook(agent, fs, instruction, history, active):
             {"role": m["role"], "content": _user_text(m) if m["role"] == "user" else m["content"]}
             for m in history if m["role"] in ("user", "assistant") and (m.get("content") or m.get("plain"))
         ],
-        "system_prompt": build_system_prompt(agent, fs),
+        "system_prompt": build_system_prompt(agent, fs, analytics=analytics),
+        "analytics": bool(analytics),
         "model": agent.model,
         "workspace": {
             "name": fs.root.name,
@@ -511,8 +531,14 @@ def call_webhook(agent, fs, instruction, history, active):
     }
 
 
-def _cli_prompt(agent, history, instruction, context):
+def _cli_prompt(agent, history, instruction, context, analytics=False):
     parts = []
+    if analytics:
+        parts.append(
+            "Analytics mode is on. Do not invent figures. "
+            "Profile CSV, Excel, and SQLite before quoting a total, and read invoices, receipts, "
+            "and financial statements from the file text before quoting a field."
+        )
     if agent.system_prompt.strip():
         parts.append(agent.system_prompt.strip())
     turns = [m for m in history[:-1] if m["role"] in ("user", "assistant") and m.get("content")][-8:]
@@ -629,13 +655,13 @@ def test_agent(agent):
 # ---------------------------------------------------------------------------
 # the agent turn
 # ---------------------------------------------------------------------------
-def run_turn(session, agent, fs, text, active=None, prepared=None, thinking="off"):
+def run_turn(session, agent, fs, text, active=None, prepared=None, thinking="off", analytics=False):
     """Generator of event dicts. Persists messages and an undo checkpoint.
 
     ``prepared`` is an attachments.Prepared value. Images go to vision models as image
     blocks; text extracted from PDF, Excel and Word is part of the user message.
     """
-    ctx = ToolContext(fs)
+    ctx = ToolContext(fs, agent)
     context = build_context(fs, active)
     history = load_history(session)
     plain = text
@@ -651,7 +677,19 @@ def run_turn(session, agent, fs, text, active=None, prepared=None, thinking="off
         user_msg["images"] = prepared.images
         block = ocr.text_for_chat_images(prepared.images)
         if block:
+            if analytics:
+                from .analytics import field_note
+                note = field_note(block)
+                if note:
+                    block = block + "\n\n" + note
             plain = (plain + "\n\n<image-text>\n" + block + "\n</image-text>").strip()
+            user_msg["content"] = plain + context
+            user_msg["plain"] = plain
+    if analytics and active and active.get("path"):
+        from .analytics import open_file_note
+        note = open_file_note(fs, active["path"])
+        if note:
+            plain = (plain + "\n\n" + note).strip()
             user_msg["content"] = plain + context
             user_msg["plain"] = plain
     user_row = _save(session, user_msg)
@@ -665,11 +703,11 @@ def run_turn(session, agent, fs, text, active=None, prepared=None, thinking="off
     yield {"type": "start", "message_id": user_row.id}
     try:
         if agent.provider in (Agent.OPENAI, Agent.ANTHROPIC):
-            yield from _tool_loop(session, agent, ctx, history, fs=fs, thinking=thinking)
+            yield from _tool_loop(session, agent, ctx, history, fs=fs, thinking=thinking, analytics=analytics)
         elif agent.provider == Agent.WEBHOOK:
-            yield from _webhook_turn(session, agent, fs, ctx, history, plain, active)
+            yield from _webhook_turn(session, agent, fs, ctx, history, plain, active, analytics=analytics)
         elif agent.provider == Agent.CLI:
-            yield from _cli_turn(session, agent, fs, ctx, history, plain, context)
+            yield from _cli_turn(session, agent, fs, ctx, history, plain, context, analytics=analytics)
         else:
             raise AgentError(f"Unknown provider {agent.provider}")
     except Cancelled:
@@ -699,13 +737,14 @@ def _remember_thinking(assistant, reply):
         assistant["thinking_blocks"] = reply["thinking_blocks"]
 
 
-def _tool_loop(session, agent, ctx, history, fs=None, thinking="off"):
-    system = build_system_prompt(agent, fs)
+def _tool_loop(session, agent, ctx, history, fs=None, thinking="off", analytics=False):
+    system = build_system_prompt(agent, fs, analytics=analytics)
     caller = call_openai if agent.provider == Agent.OPENAI else call_anthropic
     level = normalize_thinking(thinking)
+    specs = tool_specs(analytics)
     max_steps = getattr(settings, "PSEDITOR_MAX_AGENT_STEPS", 25)
     for _ in range(max_steps):
-        reply = caller(agent, system, history, thinking=level)
+        reply = caller(agent, system, history, thinking=level, tools=specs)
         assistant = {"role": "assistant", "content": reply["content"], "tool_calls": reply["tool_calls"]}
         _remember_thinking(assistant, reply)
         if reply.get("thinking"):
@@ -738,8 +777,8 @@ def _tool_loop(session, agent, ctx, history, fs=None, thinking="off"):
     yield {"type": "text", "content": note["content"]}
 
 
-def _webhook_turn(session, agent, fs, ctx, history, text, active):
-    data = call_webhook(agent, fs, text, history, active)
+def _webhook_turn(session, agent, fs, ctx, history, text, active, analytics=False):
+    data = call_webhook(agent, fs, text, history, active, analytics=analytics)
     for i, action in enumerate(data["actions"]):
         if not isinstance(action, dict):
             continue
@@ -761,8 +800,8 @@ def _webhook_turn(session, agent, fs, ctx, history, text, active):
         yield {"type": "text", "content": data["reply"]}
 
 
-def _cli_turn(session, agent, fs, ctx, history, text, context):
-    prompt = _cli_prompt(agent, history, text, context)
+def _cli_turn(session, agent, fs, ctx, history, text, context, analytics=False):
+    prompt = _cli_prompt(agent, history, text, context, analytics=analytics)
     before = fs.snapshot()
     args = {"command": agent.command, "prompt": prompt[:3000]}
     yield {"type": "tool_call", "id": "cli", "name": "cli_agent", "arguments": args}

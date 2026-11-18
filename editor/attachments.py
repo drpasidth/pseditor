@@ -32,6 +32,7 @@ _EXT_KIND = {
     "png": "image", "jpg": "image", "jpeg": "image", "gif": "image", "webp": "image", "bmp": "image",
     "pdf": "pdf",
     "xlsx": "excel", "xlsm": "excel", "xls": "excel",
+    "csv": "csv", "tsv": "csv",
     "docx": "word", "doc": "word",
 }
 _MIME_KIND = {
@@ -41,13 +42,15 @@ _MIME_KIND = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "excel",
     "application/vnd.ms-excel": "excel",
     "application/vnd.ms-excel.sheet.macroenabled.12": "excel",
+    "text/csv": "csv",
+    "text/tab-separated-values": "csv",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "word",
     "application/msword": "word",
 }
-_KIND_LABEL = {"image": "image", "pdf": "PDF", "excel": "Excel", "word": "Word"}
+_KIND_LABEL = {"image": "image", "pdf": "PDF", "excel": "Excel", "csv": "CSV", "word": "Word"}
 _UNSUPPORTED = (
-    "Attach an image (png, jpg, gif, webp, bmp), a PDF, an Excel file (xlsx, xlsm, xls) "
-    "or a Word file (docx, doc)."
+    "Attach an image (png, jpg, gif, webp, bmp), a PDF, an Excel file (xlsx, xlsm, xls), "
+    "a CSV file (csv, tsv), or a Word file (docx, doc)."
 )
 
 
@@ -63,8 +66,12 @@ class Prepared:
         return bool(self.meta)
 
 
-def prepare_attachments(items):
-    """Validate and read attachments. Raises FsError with a message for the user."""
+def prepare_attachments(items, analytics=False):
+    """Validate and read attachments. Raises FsError with a message for the user.
+
+    In analytics mode, CSV and Excel attachments are profiled (totals and a short
+    preview) instead of dumping the sheet, and PDF/Word text gets labeled fields.
+    """
     if not items:
         return Prepared("", [], [])
     if not isinstance(items, list):
@@ -85,15 +92,19 @@ def prepare_attachments(items):
             meta.append({"name": name, "mime": mime, "kind": "image"})
             blocks.append(f"### {name} (image)\nThe user attached this image. It is included for you to look at.")
         elif kind == "pdf":
-            text = _clip(_read_pdf(name, raw), name)
+            text = _document_text(_clip(_read_pdf(name, raw), name), analytics)
             meta.append({"name": name, "mime": "application/pdf", "kind": "pdf"})
             blocks.append(f"### {name} (PDF)\n{text}")
         elif kind == "excel":
-            text = _clip(_read_excel(name, raw), name)
+            text = _tabular_text(name, raw, "excel", analytics)
             meta.append({"name": name, "mime": "application/vnd.ms-excel", "kind": "excel"})
             blocks.append(f"### {name} (Excel)\n{text}")
+        elif kind == "csv":
+            text = _tabular_text(name, raw, "csv", analytics)
+            meta.append({"name": name, "mime": "text/csv", "kind": "csv"})
+            blocks.append(f"### {name} (CSV)\n{text}")
         else:
-            text = _clip(_read_word(name, raw), name)
+            text = _document_text(_clip(_read_word(name, raw), name), analytics)
             meta.append({"name": name, "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                          "kind": "word"})
             blocks.append(f"### {name} (Word)\n{text}")
@@ -107,6 +118,32 @@ def prepare_attachments(items):
     if len(body) > TOTAL_CHARS:
         body = body[:TOTAL_CHARS] + "\n\n…(further attachment text omitted)\n</attachments>"
     return Prepared(body, images, meta)
+
+
+def _tabular_text(name, raw, kind, analytics):
+    if analytics:
+        from .analytics import summarize_attachment
+        return summarize_attachment(name, raw)
+    if kind == "excel":
+        return _clip(_read_excel(name, raw), name)
+    return _clip(_decode_text(raw), name)
+
+
+def _document_text(text, analytics):
+    if not analytics or not text:
+        return text
+    from .analytics import field_note
+    note = field_note(text)
+    return (note + "\n\n" + text).strip() if note else text
+
+
+def _decode_text(raw):
+    for enc in ("utf-8-sig", "utf-8", "cp874", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------

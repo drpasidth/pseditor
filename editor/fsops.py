@@ -204,6 +204,28 @@ class WorkspaceFS:
         except OSError as exc:
             raise FsError(f"Could not write file: {exc}")
 
+    def write_bytes(self, rel, data):
+        """Write raw bytes (a generated image). Text files still go through write()."""
+        if not (rel or "").strip("/\\"):
+            raise FsError("Missing file path.")
+        if self.is_root_entry(rel):
+            raise FsError("Cannot write to a workspace root.")
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise FsError("Nothing to write.")
+        limit = getattr(settings, "PSEDITOR_MAX_IMAGE_BYTES", 12 * 1024 * 1024)
+        if len(data) > limit:
+            raise FsError("File is too large.")
+        p = self.resolve(rel)
+        if p.is_dir():
+            raise FsError("Path is a directory.")
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(bytes(data))
+        except PermissionError:
+            raise FsError(f"Permission denied writing: {p}")
+        except OSError as exc:
+            raise FsError(f"Could not write file: {exc}")
+
     def mkdir(self, rel):
         if self.is_root_entry(rel):
             raise FsError("That name is already a workspace root.")

@@ -3,7 +3,7 @@ import json
 
 from django.conf import settings
 
-from . import ocr
+from . import analytics, ocr
 from .fsops import FsError
 
 MAX_RESULT = 20000
@@ -85,6 +85,22 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "generate_image",
+        "description": "Generate an image from a text description and save it in the workspace. "
+                       "Use this when the user asks for a picture, illustration, icon, diagram, or any image file. "
+                       "It calls the agent's image model, spends API credits, and waits for approval. "
+                       "aspect_ratio is one of 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What the picture should show."},
+                "path": {"type": "string", "description": "Optional workspace path, such as images/panda.png."},
+                "aspect_ratio": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
         "name": "run_command",
         "description": "Run a shell command in the workspace (tests, installs, builds). "
                        "Returns the exit code and combined output.",
@@ -96,12 +112,77 @@ TOOL_SPECS = [
     },
 ]
 
+# Read-only tools added while Analytics mode is on. They sit beside the coding tools.
+ANALYTICS_TOOL_SPECS = [
+    {
+        "name": "list_datasets",
+        "description": "List CSV, Excel, SQLite, PDF, Word, and image files in the workspace that can be analyzed.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "profile_data",
+        "description": "Profile a CSV, Excel sheet, or SQLite table: row count, column types, numeric totals, "
+                       "and a short preview. Call this before quoting any figure from a table.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "sheet": {"type": "string", "description": "Excel sheet name, or SQLite table name. Omit for the first."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "query_data",
+        "description": "Filter and aggregate a CSV, Excel sheet, or SQLite table. "
+                       "Use sum, count, avg, min, or max. group_by returns one row per group.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "sheet": {"type": "string"},
+                "filters": {"type": "array", "items": {"type": "object"}},
+                "group_by": {"type": "array", "items": {"type": "string"}},
+                "metrics": {"type": "array", "items": {"type": "object"}},
+                "limit": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "sql_query",
+        "description": "Run one read-only SELECT against a SQLite file in the workspace. Writes are refused.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "sql": {"type": "string"}},
+            "required": ["path", "sql"],
+        },
+    },
+    {
+        "name": "extract_document",
+        "description": "Read a PDF, Word file, or image of an invoice, receipt, or financial statement. "
+                       "Returns labeled fields and the source line for each. Images use the OCR endpoint.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+]
+
+
+def tool_specs(analytics_mode=False):
+    if analytics_mode:
+        return TOOL_SPECS + ANALYTICS_TOOL_SPECS
+    return TOOL_SPECS
+
 
 class ToolContext:
     """Executes tools against a workspace and records originals for undo."""
 
-    def __init__(self, fs):
+    def __init__(self, fs, agent=None):
         self.fs = fs
+        self.agent = agent
         self.checkpoint = {}   # rel path -> original text, or None if it did not exist
         self.changed = []      # ordered unique list of changed rel paths
 
@@ -225,6 +306,63 @@ class ToolContext:
         if not hits:
             return "No matches."
         return "\n".join(f"{h['path']}:{h['line']}: {h['text']}" for h in hits)
+
+    def _t_list_datasets(self):
+        return analytics.list_datasets_text(self.fs)
+
+    def _t_profile_data(self, path, sheet=""):
+        return analytics.profile_text(self.fs, path, sheet or "")
+
+    def _t_query_data(self, path, sheet="", filters=None, group_by=None, metrics=None, limit=50):
+        return analytics.query_text(self.fs, path, sheet or "", filters, group_by, metrics, limit)
+
+    def _t_sql_query(self, path, sql):
+        return analytics.sql_text(self.fs, path, sql)
+
+    def _t_extract_document(self, path):
+        return analytics.extract_text(self.fs, path)
+
+    def _t_generate_image(self, prompt, path="", aspect_ratio="1:1"):
+        from . import imagegen
+        if self.agent is None:
+            raise FsError("No agent is available to generate an image.")
+        try:
+            blob, media, model = imagegen.generate(self.agent, prompt, aspect_ratio or "1:1")
+        except imagegen.ImageError as exc:
+            raise FsError(str(exc))
+        ext = imagegen.MEDIA_EXT.get(media, ".png")
+        rel = self._unique_image(self._image_rel(path, prompt, ext))
+        self._remember(rel)
+        self.fs.write_bytes(rel, blob)
+        self._changed(rel)
+        return f"Created {rel} ({media}, {model}). The file is open in the editor."
+
+    def _image_rel(self, path, prompt, ext):
+        from . import imagegen
+        raw = (path or "").replace("\\", "/").strip().strip("/")
+        if not raw:
+            raw = "images/" + imagegen.slug(prompt) + ext
+        else:
+            known = tuple(imagegen.MEDIA_EXT.values())
+            if not raw.lower().endswith(known):
+                raw += ext
+            else:
+                raw = raw.rsplit(".", 1)[0] + ext
+        return raw
+
+    def _unique_image(self, rel):
+        if not self.fs.exists(rel):
+            return rel
+        stem, dot, ext = rel.rpartition(".")
+        if not dot:
+            stem, ext = rel, ""
+        else:
+            ext = "." + ext
+        for n in range(2, 100):
+            candidate = f"{stem}-{n}{ext}"
+            if not self.fs.exists(candidate):
+                return candidate
+        raise FsError("Could not find a free file name for the image.")
 
     def _t_run_command(self, command, cwd=""):
         if not getattr(settings, "PSEDITOR_ALLOW_TERMINAL", False):

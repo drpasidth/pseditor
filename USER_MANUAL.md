@@ -112,7 +112,7 @@ If the browser does not open by itself, type that address in the browser.
 
 ```
 +-----------------------------------------------------------------------------------+
-| PSEditor | Open folder... | Go to file | Terminal |              | AI Chat | Agents|  <- top bar
+| PSEditor | Open folder... | Go to file | Terminal | View |     | AI Chat | Agents|  <- top bar
 +--------------+---------------------------------------------+----------------------+
 | Explorer     |  tabs: app.py  index.html                   | Agent v  Chat v  + 🗑 |
 | Search       |                                             | model ...   Models v |
@@ -129,13 +129,15 @@ If the browser does not open by itself, type that address in the browser.
 
 | Area | What it does |
 |------|--------------|
-| **Top bar** | Open a folder, go to a file by name, show/hide the terminal, show/hide the AI chat, set the OCR endpoint, set up agents, and open this manual (**?**). |
+| **Top bar** | Open a folder, go to a file by name, show/hide the terminal, open **View** to show or hide the PSEditor window and the chat, set the OCR endpoint, set up agents, and open this manual (**?**). |
 | **Left sidebar** | **Explorer** (file tree) and **Search** (search inside files). |
 | **Center** | Code editor with tabs. The terminal opens below it. |
 | **Right panel** | AI chat: choose agent, conversation and model; see which folders the agent can use; type requests. |
 | **Status bar** | Current state and messages. |
 
 Drag the thin borders between the areas to resize them.
+
+**View** on the top bar shows or hides the **PSEditor** window (the code editor) and the **Chat** window. At least one of them stays open. **AI Chat** and **Ctrl+L** open the chat and put the cursor in the message box.
 
 ---
 
@@ -467,7 +469,7 @@ To use a different port, change `8800` in `run.bat` in **both** places.
 | **Ctrl+P** | Go to file |
 | **Ctrl+Shift+O** | Open folder |
 | **Ctrl+Shift+F** | Search in files |
-| **Ctrl+L** | Focus the AI chat box |
+| **Ctrl+L** | Show the AI chat and focus the message box |
 | **Ctrl+`** | Show/hide the terminal |
 | **Enter** / **Shift+Enter** | In the chat box: send / new line |
 | **Ctrl+F** / **Ctrl+H** | In the editor: find / replace |

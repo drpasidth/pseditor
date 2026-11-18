@@ -15,7 +15,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
 from . import agents as agent_mod
-from . import approvals, ocr, ptyterm, shell
+from . import analytics, approvals, ocr, openwith, ptyterm, shell
 from .manual import manual_html
 from .attachments import prepare_attachments
 from .fsops import FsError, WorkspaceFS, folder_label
@@ -243,6 +243,20 @@ def file_view(request, ws_id):
     return JsonResponse({"ok": True})
 
 
+@api(["POST"])
+def open_with(request, ws_id):
+    """Show the system Open With dialog for a file inside this workspace."""
+    _, fs = ws_fs(ws_id)
+    path = (request.json.get("path") or "").strip()
+    if not path:
+        raise FsError("Missing path.")
+    abs_path = fs.resolve(path)
+    if not abs_path.is_file():
+        raise FsError("File not found.")
+    openwith.launch(abs_path)
+    return JsonResponse({"ok": True, "path": path})
+
+
 _PREVIEW_BRIDGE = r"""
 <script>
 (function () {
@@ -337,6 +351,35 @@ def ocr_view(request, ws_id):
     if not path:
         raise FsError("Missing path.")
     return JsonResponse({"path": path, "text": ocr.read_text(fs, path)})
+
+
+@api(["POST"])
+def analyze(request, ws_id):
+    """Profile, query, or extract a workspace file. Read-only."""
+    _, fs = ws_fs(ws_id)
+    d = request.json
+    op = (d.get("op") or "profile").strip().lower()
+    path = (d.get("path") or "").strip()
+    if op == "list":
+        return JsonResponse(analytics.list_datasets(fs))
+    if not path:
+        raise FsError("Missing path.")
+    sheet = d.get("sheet") or ""
+    if op == "profile":
+        return JsonResponse(analytics.profile(fs, path, sheet))
+    if op == "query":
+        return JsonResponse(analytics.query(
+            fs, path, sheet,
+            filters=d.get("filters") or [],
+            group_by=d.get("group_by") or [],
+            metrics=d.get("metrics") or [],
+            limit=d.get("limit") or 50,
+        ))
+    if op == "sql":
+        return JsonResponse(analytics.sql_query(fs, path, d.get("sql") or ""))
+    if op == "extract":
+        return JsonResponse(analytics.extract_document(fs, path))
+    raise FsError("Unknown analysis. Use list, profile, query, sql, or extract.")
 
 
 @api(["POST"])
@@ -435,7 +478,7 @@ def pty_read(request, ws_id):
 # agents
 # ---------------------------------------------------------------------------
 def _apply_agent_fields(agent, d, creating):
-    for f in ("name", "provider", "base_url", "model", "command", "system_prompt", "extra_headers"):
+    for f in ("name", "provider", "base_url", "model", "image_model", "command", "system_prompt", "extra_headers"):
         if f in d:
             setattr(agent, f, (d[f] or "").strip() if f != "system_prompt" else (d[f] or ""))
     if d.get("api_key"):  # blank on edit = keep the stored key
@@ -459,6 +502,10 @@ def _apply_agent_fields(agent, d, creating):
             raise FsError("Extra headers must be a JSON object.")
     if agent.provider == Agent.OPENAI and not agent.model:
         raise FsError("Model is required for OpenAI-compatible agents.")
+    if len(getattr(agent, "image_model", "") or "") > 200:
+        raise FsError("Image model name is too long.")
+    if (agent.image_model or "").strip() == (agent.model or "").strip():
+        agent.image_model = ""
     if agent.provider == Agent.CLI and not agent.command:
         raise FsError("Command is required for command-line agents.")
     if agent.provider == Agent.WEBHOOK and not agent.base_url:
@@ -518,6 +565,22 @@ def agent_model(request, agent_id):
         raise FsError("Model name is too long.")
     agent.model = model
     agent.save(update_fields=["model"])
+    return JsonResponse(agent.to_dict())
+
+
+@api(["POST"])
+def agent_image_model(request, agent_id):
+    """Save the image model picked in the chat panel. Blank means: use the chat model."""
+    agent = get_object_or_404(Agent, pk=agent_id)
+    if agent.provider != Agent.OPENAI:
+        raise FsError("Image generation uses an OpenAI-compatible agent.")
+    model = (request.json.get("image_model") or "").strip()
+    if len(model) > Agent._meta.get_field("image_model").max_length:
+        raise FsError("Image model name is too long.")
+    if model == (agent.model or "").strip():
+        model = ""
+    agent.image_model = model
+    agent.save(update_fields=["image_model"])
     return JsonResponse(agent.to_dict())
 
 
@@ -594,7 +657,8 @@ def chat(request, session_id):
     s = get_object_or_404(ChatSession, pk=session_id)
     d = request.json
     text = (d.get("message") or "").strip()
-    prepared = prepare_attachments(d.get("attachments") or [])
+    analytics_mode = bool(d.get("analytics"))
+    prepared = prepare_attachments(d.get("attachments") or [], analytics=analytics_mode)
     if not text and not prepared.meta:
         raise FsError("Message is empty.")
     agent = None
@@ -614,7 +678,9 @@ def chat(request, session_id):
     thinking = agent_mod.normalize_thinking(d.get("thinking"))
 
     def stream():
-        for event in agent_mod.run_turn(s, agent, fs, text, active, prepared=prepared, thinking=thinking):
+        for event in agent_mod.run_turn(
+            s, agent, fs, text, active, prepared=prepared, thinking=thinking, analytics=analytics_mode,
+        ):
             yield json.dumps(event) + "\n"
 
     resp = StreamingHttpResponse(stream(), content_type="application/x-ndjson")
