@@ -179,20 +179,32 @@ async function setupEditor() {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const VIDEO_EXT = /\.(mp4|webm|mov)$/i;
 const TABLE_EXT = /\.(csv|tsv)$/i;
 const DATA_EXT = /\.(xlsx|xlsm|xls|sqlite3?|db|pdf|docx|doc)$/i;
 const isImagePath = path => IMAGE_EXT.test(path || "");
+const isVideoPath = path => VIDEO_EXT.test(path || "");
 const opensAsData = path => DATA_EXT.test(path || "") || (S.analytics && TABLE_EXT.test(path || ""));
+const isBinaryTab = t => !t || t.kind === "image" || t.kind === "video" || t.kind === "data";
 const tabValue = t => {
-  if (!t || t.kind === "image" || t.kind === "data") return "";
+  if (isBinaryTab(t)) return "";
   return Ed.monaco ? t.model.getValue() : t.value;
 };
 
 function showSurface(which) {
   $("#editor").classList.toggle("hidden", which !== "editor");
   $("#image-view").classList.toggle("hidden", which !== "image");
+  $("#video-view").classList.toggle("hidden", which !== "video");
   $("#data-view").classList.toggle("hidden", which !== "data");
   if (which !== "image") $("#image-view-img").removeAttribute("src");
+  if (which !== "video") {
+    const player = $("#video-view-player");
+    if (player) {
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+    }
+  }
   if (which === "editor" && Ed.monaco && Ed.ed) requestAnimationFrame(() => Ed.ed.layout());
 }
 
@@ -222,6 +234,26 @@ function showImage(t) {
     meta.textContent = `${name}  ·  could not read this image`;
   };
   img.src = `/api/ws/${S.ws.id}/preview?path=${enc(t.path)}&v=${t.rev || 0}`;
+}
+
+function showVideo(t) {
+  const player = $("#video-view-player");
+  const meta = $("#video-view-meta");
+  if (!t || t.kind !== "video") {
+    if (!S.active || (S.active.kind !== "data" && S.active.kind !== "image")) showSurface("editor");
+    return;
+  }
+  showSurface("video");
+  const name = t.path.split("/").pop();
+  meta.textContent = name;
+  player.onloadedmetadata = () => {
+    const secs = Number.isFinite(player.duration) ? Math.round(player.duration) : 0;
+    meta.textContent = secs ? `${name}  ·  ${secs}s` : name;
+  };
+  player.onerror = () => {
+    meta.textContent = `${name}  ·  could not play this video`;
+  };
+  player.src = `/api/ws/${S.ws.id}/preview?path=${enc(t.path)}&v=${t.rev || 0}`;
 }
 
 let dataToken = 0;
@@ -418,7 +450,7 @@ async function runSql() {
 }
 
 function getSelection() {
-  if (!S.active || S.active.kind === "image" || S.active.kind === "data") return "";
+  if (isBinaryTab(S.active)) return "";
   if (Ed.monaco) {
     const sel = Ed.ed.getSelection();
     return sel && !sel.isEmpty() ? S.active.model.getValueInRange(sel) : "";
@@ -454,6 +486,12 @@ function activate(t, line) {
     renderTabs();
     return;
   }
+  if (t.kind === "video") {
+    if (Ed.monaco) Ed.ed.setModel(null);
+    showVideo(t);
+    renderTabs();
+    return;
+  }
   if (t.kind === "data") {
     if (Ed.monaco) Ed.ed.setModel(null);
     showData(t);
@@ -484,6 +522,8 @@ async function openFile(path, line, asData) {
       t = { path, kind: "data", dirty: false, rev: 0 };
     } else if (isImagePath(path)) {
       t = { path, kind: "image", dirty: false, rev: Date.now() };
+    } else if (isVideoPath(path)) {
+      t = { path, kind: "video", dirty: false, rev: Date.now() };
     } else {
       let r;
       try { r = await api(`/api/ws/${S.ws.id}/file?path=${enc(path)}`); } catch (e) { return fail(e); }
@@ -524,7 +564,7 @@ function closeAllTabs() {
 }
 
 async function saveTab(t) {
-  if (!t || t.kind === "image" || t.kind === "data") return;
+  if (isBinaryTab(t)) return;
   const value = tabValue(t);
   const r = await api(`/api/ws/${S.ws.id}/file`, { method: "PUT", body: { path: t.path, content: value } });
   t.saved = value;
@@ -533,7 +573,7 @@ async function saveTab(t) {
   return r;
 }
 async function saveActive() {
-  if (!S.active || S.active.kind === "image" || S.active.kind === "data") return;
+  if (isBinaryTab(S.active)) return;
   try {
     const r = await saveTab(S.active);
     setStatus("Saved to disk: " + (r.abs || S.active.path));
@@ -559,6 +599,11 @@ async function onFilesChanged(paths) {
     if (t.kind === "image") {
       t.rev = Date.now();
       if (S.active === t) showImage(t);
+      continue;
+    }
+    if (t.kind === "video") {
+      t.rev = Date.now();
+      if (S.active === t) showVideo(t);
       continue;
     }
     if (t.kind === "data") {
@@ -1205,6 +1250,13 @@ function approvalPreview(name, a) {
     case "delete_file": return `Delete ${a.path}`;
     case "generate_image":
       return `${a.path || "a new file under images/"}${a.aspect_ratio ? "  ·  " + a.aspect_ratio : ""}\n\n${a.prompt || ""}`;
+    case "generate_video": {
+      const bits = [a.path || "a new file under videos/", (a.duration || 4) + "s"];
+      if (a.aspect_ratio) bits.push(a.aspect_ratio);
+      const head = bits.join("  ·  ");
+      const from = a.image ? `\nstarts from ${a.image}` : "";
+      return `${head}${from}\n\n${a.prompt || ""}`;
+    }
     case "run_command": return `${a.cwd ? `[${a.cwd}] ` : ""}$ ${a.command}`;
     case "cli_agent": return `${a.command}\n\nIt will receive this prompt and may change files by itself:\n\n` + clip(String(a.prompt || ""), 2000);
     default: return clip(JSON.stringify(a, null, 2), 4000);
@@ -1213,6 +1265,7 @@ function approvalPreview(name, a) {
 const approvalTitle = {
   write_file: "Write file", edit_file: "Edit file", delete_file: "Delete",
   generate_image: "Generate image",
+  generate_video: "Generate short clip",
   run_command: "Run command", cli_agent: "Run command-line agent",
 };
 function addApproval(ev) {
@@ -1292,7 +1345,7 @@ function renderSessionMessages(msgs) {
   const box = msgBox();
   box.innerHTML = "";
   if (!msgs.length) {
-    box.innerHTML = '<div class="hint" style="padding:8px">Describe what you want, or attach an image, PDF, Excel or Word file. The selected agent can read, create, and edit files, generate an image, and run commands in this workspace; you approve every change before it happens.</div>';
+    box.innerHTML = '<div class="hint" style="padding:8px">Describe what you want, or attach an image, PDF, Excel or Word file. The selected agent can read, create, and edit files, generate an image or a short video clip, and run commands in this workspace; you approve every change before it happens.</div>';
     return;
   }
   promptHistory.length = 0;
@@ -1411,6 +1464,7 @@ function attachCombo(input, getOpts) {
 const currentAgent = () => S.agents.find(a => String(a.id) === $("#agent-select").value) || null;
 const usesModel = a => !!a && (a.provider === "openai" || a.provider === "anthropic");
 let chatModels = [], imageModels = [], chatModelsFor = null;
+let videoModels = [], videoModelsFor = null;
 
 async function loadChatModels(force) {
   const a = currentAgent();
@@ -1430,7 +1484,11 @@ async function loadChatModels(force) {
 function syncModelRow() {
   const a = currentAgent();
   $("#model-row").classList.toggle("hidden", !usesModel(a));
-  if (!usesModel(a)) return;
+  if (!usesModel(a)) {
+    syncImageRow();
+    syncVideoRow();
+    return;
+  }
   // Older versions kept the choice in localStorage, which the desktop window does not keep between runs.
   const legacy = localStorage.getItem("pseditor.model." + a.id);
   if (legacy) {
@@ -1439,7 +1497,9 @@ function syncModelRow() {
   }
   $("#model-input").value = a.model || "";
   if (chatModelsFor !== a.id) { chatModels = []; imageModels = []; chatModelsFor = null; }
+  if (videoModelsFor !== (a && a.id)) { videoModels = []; videoModelsFor = null; }
   syncImageRow();
+  syncVideoRow();
 }
 function shownImageModel(a) {
   return ((a && a.image_model) || "").trim() || (a && a.model) || "";
@@ -1533,12 +1593,69 @@ $("#image-model-load").onclick = async () => {
     imageCombo.show();
   }
 };
+function syncVideoRow() {
+  const a = currentAgent();
+  const openai = !!a && a.provider === "openai";
+  $("#video-model-row").classList.toggle("hidden", !openai);
+  if (!openai) return;
+  $("#video-model-input").value = (a.video_model || "").trim();
+}
+async function loadVideoModels(force) {
+  const a = currentAgent();
+  if (!a || a.provider !== "openai") return false;
+  if (!force && videoModelsFor === a.id && videoModels.length) return true;
+  const button = $("#video-model-load");
+  if (button) button.disabled = true;
+  try {
+    const r = await api("/api/models", { method: "POST", body: { agent_id: a.id, kind: "video" } });
+    videoModels = r.models.map(m => m.id);
+    videoModelsFor = a.id;
+    return true;
+  } catch (e) { fail(e); return false; } finally { if (button) button.disabled = false; }
+}
+async function saveVideoModel(a, model) {
+  const stored = (model || "").trim();
+  if (stored === (a.video_model || "")) {
+    $("#video-model-input").value = stored;
+    return;
+  }
+  const before = a.video_model || "";
+  a.video_model = stored;
+  try {
+    const saved = await api(`/api/agents/${a.id}/video-model`, { method: "POST", body: { video_model: stored } });
+    a.video_model = saved.video_model || "";
+    $("#video-model-input").value = a.video_model;
+    toast(a.video_model ? `Video model: ${a.video_model}` : "Video model: default short-clip model");
+  } catch (e) {
+    a.video_model = before;
+    $("#video-model-input").value = before;
+    fail(e);
+  }
+}
+const videoCombo = attachCombo($("#video-model-input"), () => videoModels);
+$("#video-model-input").addEventListener("focus", async () => {
+  if (videoModelsFor === (currentAgent() || {}).id && videoModels.length) return;
+  if (await loadVideoModels() && document.activeElement === $("#video-model-input")) videoCombo.show();
+});
+$("#video-model-input").addEventListener("change", e => {
+  const a = currentAgent();
+  if (a) saveVideoModel(a, e.target.value.trim());
+});
+$("#video-model-load").onclick = async () => {
+  if (await loadVideoModels(true)) {
+    toast(`${videoModels.length} video models available`);
+    $("#video-model-input").focus();
+    videoCombo.show();
+  }
+};
 
 function setBusy(b) {
+  if (b) stopListening(true);
   $("#send").classList.toggle("hidden", b);
   $("#stop").classList.toggle("hidden", !b);
   $("#prompt").disabled = b;
   $("#attach").disabled = b;
+  $("#mic").disabled = b;
   $("#chat-status").textContent = b ? "Agent is working…" : "";
 }
 
@@ -1652,7 +1769,94 @@ composer.addEventListener("drop", e => {
   if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 
+// Speak into the chat box. The browser turns speech into text; Send still sends it.
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let micRec = null, micOn = false, micPrefix = "", micHeard = "";
+
+function stopListening(keepStatus) {
+  micOn = false;
+  if (micRec) {
+    micRec.onend = null;
+    try { micRec.stop(); } catch (e) { /* already stopped */ }
+  }
+  const btn = $("#mic");
+  btn.classList.remove("on");
+  btn.setAttribute("aria-pressed", "false");
+  btn.textContent = "Listen";
+  btn.title = "Speak instead of typing. Click again to stop.";
+  if (!keepStatus && $("#chat-status").textContent === "Listening…") $("#chat-status").textContent = "";
+}
+function micApply(extra) {
+  const spoken = (micHeard + (extra || "")).trim();
+  const gap = micPrefix && spoken && !/\s$/.test(micPrefix) ? " " : "";
+  $("#prompt").value = spoken ? micPrefix + gap + spoken : micPrefix;
+}
+function startListening() {
+  if ($("#prompt").disabled) return;
+  if (micOn) { stopListening(); return; }
+  if (!SpeechRec) {
+    toast("This window cannot listen. Open PSEditor in Edge or Chrome and allow the microphone.", true);
+    return;
+  }
+  micPrefix = $("#prompt").value;
+  micHeard = "";
+  micRec = new SpeechRec();
+  micRec.lang = $("#mic-lang").value || "en-US";
+  micRec.continuous = true;
+  micRec.interimResults = true;
+  micRec.onresult = ev => {
+    let interim = "";
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const piece = ev.results[i][0].transcript;
+      if (ev.results[i].isFinal) micHeard += piece;
+      else interim += piece;
+    }
+    micApply(interim);
+  };
+  micRec.onerror = ev => {
+    if (ev.error === "aborted" || ev.error === "no-speech") return;
+    const msg = {
+      "not-allowed": "The microphone was blocked. Allow it, then click Listen again.",
+      "audio-capture": "No microphone was found.",
+      "network": "Listening needs a network connection.",
+      "service-not-allowed": "Speech recognition is turned off in this window.",
+    }[ev.error] || "Could not listen (" + ev.error + ")";
+    toast(msg, true);
+    stopListening();
+  };
+  micRec.onend = () => {
+    if (!micOn) return;
+    setTimeout(() => { if (micOn) { try { micRec.start(); } catch (e) { stopListening(); } } }, 250);
+  };
+  micOn = true;
+  try {
+    micRec.start();
+  } catch (e) {
+    toast("Could not start listening", true);
+    stopListening();
+    return;
+  }
+  const btn = $("#mic");
+  btn.classList.add("on");
+  btn.setAttribute("aria-pressed", "true");
+  btn.textContent = "Stop";
+  btn.title = "Stop listening";
+  $("#chat-status").textContent = "Listening…";
+}
+(function initMicLang() {
+  const saved = localStorage.getItem("pseditor.speechLang");
+  const nav = (navigator.language || "").toLowerCase();
+  const lang = saved || (nav.startsWith("th") ? "th-TH" : "en-US");
+  if ([...$("#mic-lang").options].some(o => o.value === lang)) $("#mic-lang").value = lang;
+})();
+$("#mic-lang").onchange = () => {
+  localStorage.setItem("pseditor.speechLang", $("#mic-lang").value);
+  if (micOn) stopListening();
+};
+$("#mic").onclick = () => startListening();
+
 async function sendChat() {
+  stopListening(true);
   const text = $("#prompt").value.trim();
   const files = attachments.slice();
   if (!text && !files.length) return;
@@ -1704,13 +1908,19 @@ async function sendChat() {
         case "approval_result":
           resolveApproval(ev);
           document.title = baseTitle;
-          $("#chat-status").textContent = "Agent is working…";
+          $("#chat-status").textContent = ev.name === "generate_video" && ev.decision === "allow"
+            ? "Generating a short clip… this can take a few minutes"
+            : "Agent is working…";
           break;
         case "tool_result":
           fillToolCard(ev.id, ev.ok, ev.result);
           if (ev.name === "generate_image" && ev.ok) {
             const img = (ev.changed || []).filter(p => /\.(png|jpe?g|gif|webp|svg)$/i.test(p)).pop();
             if (img) openFile(img).catch(() => {});
+          }
+          if (ev.name === "generate_video" && ev.ok) {
+            const clip = (ev.changed || []).filter(p => VIDEO_EXT.test(p)).pop();
+            if (clip) openFile(clip).catch(() => {});
           }
           if (ev.changed && ev.changed.length > changedSeen) { changedSeen = ev.changed.length; onFilesChanged(ev.changed); }
           $("#chat-status").textContent = "Agent is working…";
@@ -1999,6 +2209,8 @@ function openAgentSettings(selectedId) {
       <div class="help" data-for="model" id="f-modelhelp">Click “Load models” to list what this provider offers (uses the URL and key above).</div>
       <label data-for="image">Image model</label><input id="f-image" data-for="image" value="${esc(a.image_model || "")}" placeholder="${esc(a.model || "same as the chat model")}">
       <div class="help" data-for="image">Separate from the chat model. Leave blank to generate pictures with the chat model above.</div>
+      <label data-for="video">Video model</label><input id="f-video" data-for="video" value="${esc(a.video_model || "")}" placeholder="google/veo-3.1">
+      <div class="help" data-for="video">Short clips, at most 8 seconds. Leave blank for google/veo-3.1 on OpenRouter, or sora-2 on OpenAI.</div>
       <label data-for="cmd">Command</label><input id="f-cmd" data-for="cmd" value="${esc(a.command || "")}">
       <div class="help" data-for="cmd">Runs in the workspace folder. The prompt is piped to stdin, or inserted where <code>{prompt}</code> appears. File changes made by the CLI are detected and can be reverted.</div>
       <label data-for="temp">Temperature</label><input id="f-temp" data-for="temp" value="${a.temperature ?? ""}" placeholder="default">
@@ -2015,6 +2227,7 @@ function openAgentSettings(selectedId) {
       const show = {
         url: p !== "cli", key: p !== "cli", model: p === "openai" || p === "anthropic",
         image: p === "openai",
+        video: p === "openai",
         cmd: p === "cli", temp: p === "openai" || p === "anthropic", hdr: p !== "cli",
       };
       $$("[data-for]", body).forEach(el => el.classList.toggle("hidden", !show[el.dataset.for]));
@@ -2025,7 +2238,8 @@ function openAgentSettings(selectedId) {
     const collect = () => ({
       name: $("#f-name", body).value, provider: $("#f-provider", body).value, base_url: $("#f-url", body).value,
       api_key: $("#f-key", body).value, model: $("#f-model", body).value,
-      image_model: $("#f-image", body).value, command: $("#f-cmd", body).value,
+      image_model: $("#f-image", body).value, video_model: $("#f-video", body).value,
+      command: $("#f-cmd", body).value,
       temperature: $("#f-temp", body).value, extra_headers: $("#f-hdr", body).value,
       system_prompt: $("#f-sys", body).value, is_default: $("#f-def", body).checked,
     });

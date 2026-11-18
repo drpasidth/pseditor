@@ -199,6 +199,16 @@ The buttons at the top of the Explorer do the same: **+ File**, **+ New folder**
 Click a `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` or `.bmp` file in the Explorer. PSEditor shows the picture
 instead of the code editor. Saving does not change a picture.
 
+### Short video clips
+
+Ask the chat for a short clip, for example *"Make an 8 second clip of waves on a beach, 16:9"*.
+The agent calls **generate video**, you approve it, and PSEditor saves an `.mp4` under `videos/` and plays it.
+Clips are at most 8 seconds. The **Video** box under the chat model chooses the video model. Leave it blank
+to use `google/veo-3.1` on OpenRouter (or `sora-2` on OpenAI). You can also name a picture already in the
+workspace and ask for a clip that starts from that picture.
+
+Click a `.mp4`, `.webm` or `.mov` file in the Explorer to play it. Saving does not change a clip.
+
 ### Read the text in a picture
 
 1. Click the gear in the top bar (**OCR endpoint**).
@@ -312,6 +322,8 @@ is still selected the next time you open PSEditor. Ticking **Default agent** in 
    - *"Rename the function `calc` to `calculate_total` everywhere."*
 4. Press **Enter** to send (**Shift+Enter** for a new line), or click **Send**.
 
+Click **Listen** to speak the message instead of typing. Choose **EN** or **TH**, then speak. The words appear in the box so you can edit them. Click **Stop** (the same button) when you are done, then **Send**. Listening uses the microphone and needs a network connection.
+
 **Include open file / selection** (ticked by default) sends the file you have open, and any text you selected, so
 the agent knows what you are looking at. Untick it if the request has nothing to do with the open file.
 
@@ -319,7 +331,7 @@ While the agent works, the status shows *"Agent is working…"*. The agent can:
 
 | Without asking | Only after you approve |
 |----------------|------------------------|
-| list files, read files, search | create/write a file, edit a file, delete a file, run a command |
+| list files, read files, search | create/write a file, edit a file, delete a file, generate an image, generate a short video clip, run a command |
 
 Files the agent changes are reloaded in the editor automatically.
 

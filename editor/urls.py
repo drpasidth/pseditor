@@ -32,6 +32,7 @@ urlpatterns = [
     path("api/agents/<int:agent_id>/test", views.agent_test),
     path("api/agents/<int:agent_id>/model", views.agent_model),
     path("api/agents/<int:agent_id>/image-model", views.agent_image_model),
+    path("api/agents/<int:agent_id>/video-model", views.agent_video_model),
     path("api/agents/<int:agent_id>/default", views.agent_default),
     path("api/sessions/<int:session_id>", views.session_detail),
     path("api/sessions/<int:session_id>/chat", views.chat),

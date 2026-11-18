@@ -74,6 +74,12 @@
             <div id="image-view-meta"></div>
           </div>
         </div>
+        <div id="video-view" class="hidden">
+          <video id="video-view-player" controls playsinline></video>
+          <div id="video-view-bar">
+            <div id="video-view-meta"></div>
+          </div>
+        </div>
         <div id="data-view" class="hidden">
           <div id="data-bar">
             <strong id="data-title"></strong>
@@ -136,6 +142,11 @@
         <input id="image-model-input" autocomplete="off" placeholder="same as chat model" title="Image model. It starts as the chat model. Pick another model here when pictures should use a different one.">
         <button id="image-model-load" title="Load models for image generation">Models ▾</button>
       </div>
+      <div class="chat-head2" id="video-model-row">
+        <span class="model-label">Video</span>
+        <input id="video-model-input" autocomplete="off" placeholder="google/veo-3.1" title="Video model for short clips, up to 8 seconds. Leave blank to use google/veo-3.1 on OpenRouter, or sora-2 on OpenAI.">
+        <button id="video-model-load" title="Load models for short clips">Models ▾</button>
+      </div>
       <div class="ws-row" title="Folders the model can read, write and update">
         <span class="ws-label">Workspace</span>
         <div id="ws-folders"><span class="hint">No workspace open</span></div>
@@ -156,9 +167,14 @@
           <label class="ctx" title="Show or hide the model's thinking in this chat"><input type="checkbox" id="think-show" checked> Show thinking</label>
         </div>
         <div id="attach-list" class="attach-list hidden"></div>
-        <textarea id="prompt" rows="3" title="Enter to send, Shift+Enter for a new line. Up and Down recall previous prompts so you can edit and send them again." placeholder="Ask the agent to build or change something, or to generate an image…  (Enter to send, Shift+Enter for a new line. Up/Down recalls a previous prompt. You can also attach an image, PDF, Excel, CSV, or Word file.)"></textarea>
+        <textarea id="prompt" rows="3" title="Enter to send, Shift+Enter for a new line. Up and Down recall previous prompts so you can edit and send them again." placeholder="Ask the agent to build or change something, or to generate an image or a short clip…  (Enter to send, Shift+Enter for a new line. Up/Down recalls a previous prompt. You can also attach an image, PDF, Excel, CSV, or Word file.)"></textarea>
         <div class="composer-row">
           <button type="button" id="attach" title="Attach an image, PDF, Excel, CSV, or Word file">Attach</button>
+          <button type="button" id="mic" title="Speak instead of typing. Click again to stop.">Listen</button>
+          <select id="mic-lang" title="Language to listen for">
+            <option value="en-US">EN</option>
+            <option value="th-TH">TH</option>
+          </select>
           <input id="attach-file" type="file" multiple hidden
                  accept=".png,.jpg,.jpeg,.gif,.webp,.bmp,.pdf,.xlsx,.xlsm,.xls,.csv,.tsv,.docx,.doc,image/png,image/jpeg,image/gif,image/webp,image/bmp,application/pdf,text/csv">
           <span id="chat-status"></span>

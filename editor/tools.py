@@ -101,6 +101,26 @@ TOOL_SPECS = [
         },
     },
     {
+        "name": "generate_video",
+        "description": "Generate a short video clip (at most 8 seconds) and save an mp4 in the workspace. "
+                       "Use this when the user asks for a video, clip, or animation. "
+                       "It calls the agent's video model, spends API credits, and waits for approval. "
+                       "duration is seconds: 4, 5, 6, or 8. Longer requests are shortened to 8. "
+                       "aspect_ratio is one of 16:9, 9:16, 1:1, 4:3, 3:4, 3:2, 2:3. "
+                       "Optional image is a workspace image used as the opening frame.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What the clip should show, including how it moves."},
+                "path": {"type": "string", "description": "Optional workspace path, such as videos/wave.mp4."},
+                "aspect_ratio": {"type": "string"},
+                "duration": {"type": "integer", "description": "Length in seconds. 4, 5, 6, or 8."},
+                "image": {"type": "string", "description": "Optional workspace image used as the opening frame."},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
         "name": "run_command",
         "description": "Run a shell command in the workspace (tests, installs, builds). "
                        "Returns the exit code and combined output.",
@@ -337,6 +357,49 @@ class ToolContext:
         self._changed(rel)
         return f"Created {rel} ({media}, {model}). The file is open in the editor."
 
+    def _t_generate_video(self, prompt, path="", aspect_ratio="16:9", duration=4, image=""):
+        from . import videogen
+        if self.agent is None:
+            raise FsError("No agent is available to generate a video.")
+        frame = self._video_frame(image) if (image or "").strip() else None
+        # Reject a path outside the workspace before the request spends API credits.
+        self.fs.resolve(self._video_rel(path, prompt, ".mp4"))
+        try:
+            blob, media, model, seconds = videogen.generate(
+                self.agent, prompt, aspect_ratio or "16:9", duration, frame)
+        except videogen.VideoError as exc:
+            raise FsError(str(exc))
+        ext = videogen.MEDIA_EXT.get(media, ".mp4")
+        rel = self._unique_rel(self._video_rel(path, prompt, ext), "video")
+        self._remember(rel)
+        limit = getattr(settings, "PSEDITOR_MAX_VIDEO_BYTES", 40 * 1024 * 1024)
+        self.fs.write_bytes(rel, blob, limit=limit)
+        self._changed(rel)
+        return f"Created {rel} ({media}, {seconds}s, {model}). The clip is open in the editor."
+
+    def _video_frame(self, path):
+        from . import videogen
+        file_path = self.fs.resolve(path)
+        if not file_path.is_file():
+            raise FsError(f"Image not found: {path}")
+        try:
+            return videogen.frame_from_bytes(file_path.read_bytes())
+        except videogen.VideoError as exc:
+            raise FsError(str(exc))
+
+    def _video_rel(self, path, prompt, ext):
+        from . import videogen
+        raw = (path or "").replace("\\", "/").strip().strip("/")
+        if not raw:
+            raw = "videos/" + videogen.slug(prompt) + ext
+        else:
+            known = tuple(videogen.MEDIA_EXT.values())
+            if not raw.lower().endswith(known):
+                raw += ext
+            else:
+                raw = raw.rsplit(".", 1)[0] + ext
+        return raw
+
     def _image_rel(self, path, prompt, ext):
         from . import imagegen
         raw = (path or "").replace("\\", "/").strip().strip("/")
@@ -351,6 +414,9 @@ class ToolContext:
         return raw
 
     def _unique_image(self, rel):
+        return self._unique_rel(rel, "image")
+
+    def _unique_rel(self, rel, label):
         if not self.fs.exists(rel):
             return rel
         stem, dot, ext = rel.rpartition(".")
@@ -362,7 +428,7 @@ class ToolContext:
             candidate = f"{stem}-{n}{ext}"
             if not self.fs.exists(candidate):
                 return candidate
-        raise FsError("Could not find a free file name for the image.")
+        raise FsError(f"Could not find a free file name for the {label}.")
 
     def _t_run_command(self, command, cwd=""):
         if not getattr(settings, "PSEDITOR_ALLOW_TERMINAL", False):

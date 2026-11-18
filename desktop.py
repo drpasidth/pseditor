@@ -104,6 +104,19 @@ class DesktopApi:
         return True
 
 
+def _allow_microphone(sender, args):
+    """The chat Listen button needs the microphone. Allow it without a second prompt."""
+    try:
+        kind = str(args.PermissionKind)
+        if "Microphone" not in kind:
+            return
+        from Microsoft.Web.WebView2.Core import CoreWebView2PermissionState
+
+        args.State = CoreWebView2PermissionState.Allow
+    except Exception:
+        pass
+
+
 def _enable_edit_menu():
     """Right-click Copy, Paste, Undo and Redo stay off unless debug mode is on.
 
@@ -119,6 +132,10 @@ def _enable_edit_menu():
         original(self, sender, args)
         try:
             sender.CoreWebView2.Settings.AreDefaultContextMenusEnabled = True
+        except Exception:
+            pass
+        try:
+            sender.CoreWebView2.PermissionRequested += _allow_microphone
         except Exception:
             pass
 

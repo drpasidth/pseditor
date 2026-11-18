@@ -15,7 +15,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
 from . import agents as agent_mod
-from . import analytics, approvals, ocr, openwith, ptyterm, shell
+from . import analytics, approvals, ocr, openwith, ptyterm, shell, videogen
 from .manual import manual_html
 from .attachments import prepare_attachments
 from .fsops import FsError, WorkspaceFS, folder_label
@@ -309,8 +309,9 @@ def preview(request, ws_id):
     abs_path = fs.resolve(path)
     if not abs_path.is_file():
         raise FsError("File not found.")
-    ctype, _ = mimetypes.guess_type(str(abs_path))
-    ctype = ctype or "application/octet-stream"
+    ctype = _media_type(abs_path)
+    if ctype.startswith("video/"):
+        return _video_response(request, abs_path, ctype)
     if ctype.startswith("text/html") or abs_path.suffix.lower() in (".html", ".htm"):
         try:
             html = abs_path.read_text(encoding="utf-8")
@@ -324,6 +325,52 @@ def preview(request, ws_id):
             html = bridge + html
         return HttpResponse(html, content_type="text/html; charset=utf-8")
     return FileResponse(abs_path.open("rb"), content_type=ctype)
+
+
+_VIDEO_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
+
+
+def _media_type(abs_path):
+    ext = abs_path.suffix.lower()
+    if ext in _VIDEO_TYPES:
+        return _VIDEO_TYPES[ext]
+    ctype, _ = mimetypes.guess_type(str(abs_path))
+    return ctype or "application/octet-stream"
+
+
+def _video_response(request, abs_path, ctype):
+    """Serve a clip with range support so the player can seek."""
+    size = abs_path.stat().st_size
+    range_header = request.META.get("HTTP_RANGE", "")
+    if range_header.startswith("bytes="):
+        spec = range_header[6:].split(",", 1)[0].strip()
+        start_s, _, end_s = spec.partition("-")
+        try:
+            if start_s == "":
+                length = int(end_s)
+                start = max(0, size - length)
+                end = size - 1
+            else:
+                start = int(start_s)
+                end = int(end_s) if end_s else size - 1
+        except ValueError:
+            start, end = 0, -1
+        end = min(end, size - 1)
+        if start < 0 or start > end or start >= size:
+            resp = HttpResponse(status=416)
+            resp["Content-Range"] = f"bytes */{size}"
+            return resp
+        with abs_path.open("rb") as fh:
+            fh.seek(start)
+            data = fh.read(end - start + 1)
+        resp = HttpResponse(data, status=206, content_type=ctype)
+        resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+        resp["Content-Length"] = str(len(data))
+        resp["Accept-Ranges"] = "bytes"
+        return resp
+    resp = FileResponse(abs_path.open("rb"), content_type=ctype)
+    resp["Accept-Ranges"] = "bytes"
+    return resp
 
 
 @api(["GET", "PUT"])
@@ -478,7 +525,7 @@ def pty_read(request, ws_id):
 # agents
 # ---------------------------------------------------------------------------
 def _apply_agent_fields(agent, d, creating):
-    for f in ("name", "provider", "base_url", "model", "image_model", "command", "system_prompt", "extra_headers"):
+    for f in ("name", "provider", "base_url", "model", "image_model", "video_model", "command", "system_prompt", "extra_headers"):
         if f in d:
             setattr(agent, f, (d[f] or "").strip() if f != "system_prompt" else (d[f] or ""))
     if d.get("api_key"):  # blank on edit = keep the stored key
@@ -506,6 +553,10 @@ def _apply_agent_fields(agent, d, creating):
         raise FsError("Image model name is too long.")
     if (agent.image_model or "").strip() == (agent.model or "").strip():
         agent.image_model = ""
+    if len(getattr(agent, "video_model", "") or "") > 200:
+        raise FsError("Video model name is too long.")
+    if (agent.video_model or "").strip() == videogen.default_model(agent.base_url):
+        agent.video_model = ""
     if agent.provider == Agent.CLI and not agent.command:
         raise FsError("Command is required for command-line agents.")
     if agent.provider == Agent.WEBHOOK and not agent.base_url:
@@ -585,6 +636,22 @@ def agent_image_model(request, agent_id):
 
 
 @api(["POST"])
+def agent_video_model(request, agent_id):
+    """Save the video model picked in the chat panel. Blank uses the short-clip default."""
+    agent = get_object_or_404(Agent, pk=agent_id)
+    if agent.provider != Agent.OPENAI:
+        raise FsError("Video generation uses an OpenAI-compatible agent.")
+    model = (request.json.get("video_model") or "").strip()
+    if len(model) > Agent._meta.get_field("video_model").max_length:
+        raise FsError("Video model name is too long.")
+    if model == videogen.default_model(agent.base_url):
+        model = ""
+    agent.video_model = model
+    agent.save(update_fields=["video_model"])
+    return JsonResponse(agent.to_dict())
+
+
+@api(["POST"])
 def models_list(request):
     """List models for an (possibly unsaved) agent configuration."""
     d = request.json
@@ -592,9 +659,15 @@ def models_list(request):
     provider = d.get("provider") or (saved.provider if saved else Agent.OPENAI)
     base_url = (d.get("base_url") or "").strip() or (saved.base_url if saved else "")
     api_key = (d.get("api_key") or "").strip() or (saved.api_key if saved else "")
+    headers = saved.headers() if saved else None
     try:
-        models = agent_mod.list_models(provider, base_url, api_key, saved.headers() if saved else None)
-    except agent_mod.AgentError as exc:
+        if d.get("kind") == "video":
+            if provider != Agent.OPENAI:
+                raise FsError("Video generation uses an OpenAI-compatible agent.")
+            models = videogen.list_models(base_url, api_key, headers)
+        else:
+            models = agent_mod.list_models(provider, base_url, api_key, headers)
+    except (agent_mod.AgentError, videogen.VideoError) as exc:
         raise FsError(str(exc))
     return JsonResponse({"models": models})
 

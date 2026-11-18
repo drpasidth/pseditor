@@ -15,8 +15,10 @@ from .models import Agent, Workspace
 
 
 class FakeResp:
-    def __init__(self, data, status=200):
-        self._data, self.status_code, self.text = data, status, json.dumps(data)
+    def __init__(self, data, status=200, content=None):
+        self._data, self.status_code = data, status
+        self.text = json.dumps(data) if isinstance(data, (dict, list)) else ""
+        self.content = b"" if content is None else content
 
     def json(self):
         return self._data
@@ -61,6 +63,10 @@ def _png_bytes():
     buf = io.BytesIO()
     Image.new("RGB", (8, 8), (220, 20, 20)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _mp4_bytes():
+    return b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2" + b"\x00" * 16
 
 
 def _xlsx_bytes():
@@ -183,6 +189,8 @@ class EditorTests(TestCase):
         self.assertRegex(html, r"app\.js\?v=\d+")   # cache-busting so browsers don't run a stale UI
         self.assertRegex(html, r"app\.css\?v=\d+")
         self.assertIn('id="attach"', html)
+        self.assertIn('id="mic"', html)
+        self.assertIn('id="mic-lang"', html)
         self.assertIn('id="image-view"', html)
         self.assertIn('id="btn-ocr"', html)
         self.assertIn('id="btn-help"', html)
@@ -1490,3 +1498,159 @@ class EditorTests(TestCase):
         self.assertEqual(changed["image_model"], "black-forest-labs/flux.2-pro")
         followed = self.j("post", f"/api/agents/{same['id']}/image-model", {"image_model": "chat-model"}).json()
         self.assertEqual(followed["image_model"], "")
+
+    def test_generate_video_saves_a_short_mp4_and_needs_approval(self):
+        from .agents import build_system_prompt
+        from .fsops import WorkspaceFS
+        from .tools import ToolContext, tool_specs
+        from .videogen import clip_duration, endpoint_for, model_for
+        mp4 = _mp4_bytes()
+        agent = Agent(name="clip", provider="openai", base_url="https://openrouter.ai/api/v1",
+                      api_key="sk-test", model="chat-model", video_model="google/veo-3.1")
+        with self.settings(PSEDITOR_REQUIRE_APPROVAL=True):
+            self.assertTrue(approvals.required("generate_video"))
+        self.assertIn("generate_video", [t["name"] for t in tool_specs()])
+        self.assertEqual(endpoint_for(agent.base_url), ("https://openrouter.ai/api/v1/videos", "openrouter"))
+        self.assertEqual(endpoint_for("https://api.openai.com/v1"), ("https://api.openai.com/v1/videos", "openai"))
+        self.assertEqual(model_for(Agent(provider="openai", base_url="https://openrouter.ai/api/v1", model="m")),
+                         "google/veo-3.1")
+        self.assertEqual(model_for(agent), "google/veo-3.1")
+        self.assertEqual(clip_duration(30), 8)
+        self.assertEqual(clip_duration(5), 5)
+        self.assertEqual(clip_duration("3s"), 4)
+        ctx = ToolContext(WorkspaceFS(self.root), agent)
+        job = "https://openrouter.ai/api/v1/videos/job1"
+        submit = FakeResp({"id": "job1", "polling_url": job, "status": "pending"}, 202)
+        pending = FakeResp({"id": "job1", "status": "in_progress"})
+        done = FakeResp({"id": "job1", "status": "completed", "unsigned_urls": [job + "/content?index=0"]})
+        video = FakeResp({}, content=mp4)
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", return_value=submit) as post, \
+                mock.patch("editor.videogen.requests.get", side_effect=[pending, done, video]) as get:
+            ok, msg = ctx.execute("generate_video", {
+                "prompt": "waves on a beach", "aspect_ratio": "16:9", "duration": 30,
+            })
+        self.assertTrue(ok, msg)
+        saved = self.root / "videos" / "waves-on-a-beach.mp4"
+        self.assertTrue(saved.is_file(), msg)
+        self.assertEqual(saved.read_bytes(), mp4)
+        self.assertIn("8s", msg)
+        sent = post.call_args.kwargs["json"]
+        self.assertEqual(sent["model"], "google/veo-3.1")
+        self.assertEqual(sent["duration"], 8)
+        self.assertEqual(sent["aspect_ratio"], "16:9")
+        self.assertEqual(sent["resolution"], "720p")
+        self.assertFalse(sent["generate_audio"])
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer sk-test")
+        self.assertTrue(all("openrouter.ai" in c.args[0] for c in get.call_args_list))
+        (self.root / "poster.png").write_bytes(_png_bytes())
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", return_value=submit) as post, \
+                mock.patch("editor.videogen.requests.get", side_effect=[done, video]):
+            ok, msg = ctx.execute("generate_video", {"prompt": "waves on a beach", "image": "poster.png"})
+        self.assertTrue(ok, msg)
+        self.assertTrue((self.root / "videos" / "waves-on-a-beach-2.mp4").is_file())
+        self.assertIn("frame_images", post.call_args.kwargs["json"])
+        bad_poll = FakeResp({
+            "id": "job1", "status": "pending",
+            "polling_url": "http://169.254.169.254/latest",
+        }, 202)
+        seen = []
+
+        def track_get(url, **kwargs):
+            seen.append(url)
+            if "169.254" in url:
+                raise AssertionError(url)
+            if url.endswith("/content") or "/content?" in url:
+                return video
+            return done
+
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", return_value=bad_poll), \
+                mock.patch("editor.videogen.requests.get", side_effect=track_get):
+            ok, msg = ctx.execute("generate_video", {"prompt": "safe poll", "path": "videos/safe.mp4"})
+        self.assertTrue(ok, msg)
+        self.assertTrue(all(u.startswith("https://openrouter.ai/") for u in seen), seen)
+        ok, msg = ctx.execute("generate_video", {"path": "../escape.mp4", "prompt": "x"})
+        self.assertFalse(ok)
+        self.assertFalse((self.root.parent / "escape.mp4").exists())
+        with mock.patch("editor.videogen.requests.post", return_value=FakeResp({"error": {"message": "no credits"}}, 402)):
+            ok, msg = ctx.execute("generate_video", {"prompt": "a cat running"})
+        self.assertFalse(ok)
+        self.assertIn("no credits", msg)
+        failed = FakeResp({"id": "job1", "status": "failed", "error": "provider busy"})
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", return_value=submit), \
+                mock.patch("editor.videogen.requests.get", return_value=failed):
+            ok, msg = ctx.execute("generate_video", {"prompt": "this fails"})
+        self.assertFalse(ok)
+        self.assertIn("provider busy", msg)
+        bad = FakeResp({"error": {"message": "duration must be one of 4, 6, 8"}}, 400)
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", side_effect=[bad, submit]) as post, \
+                mock.patch("editor.videogen.requests.get", side_effect=[done, video]):
+            ok, msg = ctx.execute("generate_video", {"prompt": "retry me"})
+        self.assertTrue(ok, msg)
+        self.assertNotIn("duration", post.call_args_list[1].kwargs["json"])
+        with self.settings(PSEDITOR_MAX_VIDEO_BYTES=8):
+            with mock.patch("editor.videogen.time.sleep"), \
+                    mock.patch("editor.videogen.requests.post", return_value=submit), \
+                    mock.patch("editor.videogen.requests.get", side_effect=[done, video]):
+                ok, msg = ctx.execute("generate_video", {"prompt": "too big", "path": "videos/big.mp4"})
+        self.assertFalse(ok)
+        self.assertIn("too large", msg)
+        self.assertFalse((self.root / "videos" / "big.mp4").exists())
+        bare = Agent(name="nokey-v", provider="openai", base_url="https://openrouter.ai/api/v1", model="m")
+        ok, msg = ToolContext(WorkspaceFS(self.root), bare).execute("generate_video", {"prompt": "x"})
+        self.assertFalse(ok)
+        self.assertIn("API key", msg)
+        claude = Agent(name="c-v", provider="anthropic", model="claude", api_key="k")
+        ok, msg = ToolContext(WorkspaceFS(self.root), claude).execute("generate_video", {"prompt": "x"})
+        self.assertFalse(ok)
+        self.assertIn("OpenAI-compatible", msg)
+        self.assertIn("generate_video", build_system_prompt(agent))
+        openai_agent = Agent(name="sora", provider="openai", base_url="https://api.openai.com/v1",
+                             api_key="sk-test", model="gpt")
+        with mock.patch("editor.videogen.time.sleep"), \
+                mock.patch("editor.videogen.requests.post", return_value=FakeResp({"id": "video_1", "status": "completed"})) as post, \
+                mock.patch("editor.videogen.requests.get", return_value=video):
+            ok, msg = ToolContext(WorkspaceFS(self.root), openai_agent).execute(
+                "generate_video", {"prompt": "a red bus", "duration": 5, "aspect_ratio": "9:16"})
+        self.assertTrue(ok, msg)
+        sent = post.call_args.kwargs["json"]
+        self.assertEqual(sent["model"], "sora-2")
+        self.assertEqual(sent["seconds"], "4")
+        self.assertEqual(sent["size"], "720x1280")
+        self.assertNotIn("duration", sent)
+        saved_agent = self.j("post", "/api/agents", {
+            "name": "director", "provider": "openai", "model": "m",
+            "base_url": "https://openrouter.ai/api/v1", "video_model": "minimax/hailuo-3",
+        }).json()
+        self.assertEqual(saved_agent["video_model"], "minimax/hailuo-3")
+        blank = self.j("post", "/api/agents", {
+            "name": "default-clip", "provider": "openai", "model": "m",
+            "base_url": "https://openrouter.ai/api/v1", "video_model": "google/veo-3.1",
+        }).json()
+        self.assertEqual(blank["video_model"], "")
+        self.assertEqual(model_for(Agent.objects.get(pk=blank["id"])), "google/veo-3.1")
+        picked = self.j("post", f"/api/agents/{blank['id']}/video-model",
+                        {"video_model": "alibaba/wan-2.7"}).json()
+        self.assertEqual(picked["video_model"], "alibaba/wan-2.7")
+        listed = self.j("post", "/api/models", {"agent_id": blank["id"], "kind": "video",
+                                                "base_url": "https://api.openai.com/v1"}).json()
+        self.assertIn("sora-2", [m["id"] for m in listed["models"]])
+        (self.root / "clip.mp4").write_bytes(mp4)
+        whole = self.client.get(f"/api/ws/{self.ws}/preview", {"path": "clip.mp4"})
+        self.assertEqual(whole.status_code, 200)
+        self.assertEqual(whole["Content-Type"], "video/mp4")
+        self.assertEqual(whole["Accept-Ranges"], "bytes")
+        body = b"".join(whole.streaming_content)
+        whole.close()
+        self.assertEqual(body, mp4)
+        part = self.client.get(f"/api/ws/{self.ws}/preview", {"path": "clip.mp4"}, HTTP_RANGE="bytes=0-7")
+        self.assertEqual(part.status_code, 206)
+        self.assertEqual(part.content, mp4[:8])
+        self.assertTrue(part["Content-Range"].startswith("bytes 0-7/"))
+        denied = self.client.get(f"/api/ws/{self.ws}/file", {"path": "clip.mp4"})
+        self.assertEqual(denied.status_code, 400)
+        self.assertIn("Binary", denied.json()["error"])

@@ -19,7 +19,7 @@ HTTP_TIMEOUT = 300
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 DEFAULT_SYSTEM_PROMPT = """You are the coding agent inside PSEditor, a code editor similar to Cursor.
-You work on the user's workspace through tools: workspace_info, list_files, read_file, search, write_file, edit_file, delete_file, generate_image and run_command.
+You work on the user's workspace through tools: workspace_info, list_files, read_file, search, write_file, edit_file, delete_file, generate_image, generate_video and run_command.
 The workspace is the set of folders the user has added to it; you can read, create, update and delete files inside those folders only.
 The user can add more folders at any time, so call workspace_info if you are unsure which folders are available.
 
@@ -28,9 +28,10 @@ Guidelines:
 - Prefer edit_file for small, targeted changes; use write_file for new files or full rewrites.
 - Make the changes the user asked for directly with tools instead of only describing them.
 - After changing code, verify it when practical (run tests or the program with run_command).
-- Every write_file, edit_file, delete_file and run_command is shown to the user, who must approve it before it runs. If an action is denied, do not retry it unchanged: take the user's reason into account, try a different approach, or ask what they want.
+- Every write_file, edit_file, delete_file, generate_image, generate_video and run_command is shown to the user, who must approve it before it runs. If an action is denied, do not retry it unchanged: take the user's reason into account, try a different approach, or ask what they want.
 - Keep final answers short: say what you changed and anything the user must do next.
 - When the user asks you to create, draw, or generate a picture, call generate_image with a detailed prompt. It saves an image file in the workspace. Do not say an image was created unless that tool succeeded.
+- When the user asks for a video or a short clip, call generate_video with a detailed prompt that includes the motion. It saves an mp4 of at most 8 seconds. Do not say a clip was created unless that tool succeeded.
 - The user may attach images, PDFs, Excel workbooks and Word documents. Text extracted from documents is in the user message inside <attachments>. Text read from images is inside <image-text>. read_file on a png, jpg, gif, webp or bmp also returns that text.
 Operating system of the host: {os}.{multi}"""
 
@@ -45,7 +46,8 @@ Rules:
 - Images are read with the OCR endpoint. If that is not configured or it fails, say so instead of guessing the text.
 - You may use write_file when the user asks to save a report. Do not change source data unless they ask.
 - When the user asks for a picture, call generate_image. It saves an image file. Do not invent an image.
-- Every write_file, edit_file, delete_file and run_command waits for the user's approval. Reads and analysis tools do not.
+- When the user asks for a video or a short clip, call generate_video. It saves an mp4 of at most 8 seconds. Do not invent a video.
+- Every write_file, edit_file, delete_file, generate_image, generate_video and run_command waits for the user's approval. Reads and analysis tools do not.
 - Keep the answer short: the result, the figures, and the file they came from.
 Operating system of the host: {os}.{multi}"""
 
@@ -76,7 +78,7 @@ def _ask(session, call_id, name, args):
         decision = approvals.wait(a)
     finally:
         approvals.discard(a.id)  # also runs when the client disconnects mid-wait
-    yield {"type": "approval_result", "id": a.id, "tool_id": call_id, "decision": decision}
+    yield {"type": "approval_result", "id": a.id, "tool_id": call_id, "name": name, "decision": decision}
     if decision == approvals.ALLOW:
         return True, ""
     if decision == approvals.DENY:

@@ -136,6 +136,10 @@ class Agent(models.Model):
         max_length=200, blank=True, default="",
         help_text="Model used by generate_image. Blank uses the built-in default.",
     )
+    video_model = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Model used by generate_video. Blank uses the short-clip default.",
+    )
     command = models.CharField(
         max_length=1000, blank=True,
         help_text="CLI template. Use {prompt} to inject the prompt, otherwise it is sent on stdin.",
@@ -169,6 +173,7 @@ class Agent(models.Model):
             "base_url": self.base_url,
             "model": self.model,
             "image_model": self.image_model,
+            "video_model": self.video_model,
             "command": self.command,
             "system_prompt": self.system_prompt,
             "temperature": self.temperature,
